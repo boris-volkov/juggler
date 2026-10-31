@@ -19,7 +19,7 @@
   const G = 9.81;
   const BALL_R = 0.024;
   const MIN_DWELL = 0.08;    // beats
-  const BULGE = 0.3;         // outer-bottom bulge of the hand loops
+  const BULGE = 0.3;         // bottom bulges of the hand loops (throw and catch sides)
   const TAU = Math.PI * 2;
 
   const mod = (x, m) => ((x % m) + m) % m;
@@ -33,34 +33,38 @@
 
   // ---------- geometry ----------
 
-  // Hand loop: an ellipse with one bottom quarter pushed out and down, like
-  // a racing line swinging wide through a U-turn. The bulge sits on the
-  // throwing side (q = +1 outside, -1 inside), just before the throw, so the
-  // hand has a longer run to accelerate along the throw. The push is
-  //   w = sin^2(th) * (1 + q cos th) / 2   (lower half only)
-  // which peaks below the centre on the throwing side, fades toward the
-  // other side, and is zero with zero slope at the centre line, so the sides
-  // keep their vertical tangents and the joint with the round upper half is
-  // smooth.
-  function makeGeom(X, a, b, e, q) {
-    const w = (th) => {
+  // Hand loop: an ellipse with both bottom quarters pushed out and down, like
+  // a racing line swinging wide through a U-turn. One bulge sits on the
+  // throwing side, so the hand has a longer straight run to accelerate along
+  // the throw; the other on the catching side, so it can carry on with the
+  // ball and slow it before turning. The turn itself is left for the bottom.
+  // Each push (sg = +1 outside, -1 inside) is
+  //   w = sin^2(th) * (1 + sg cos th) / 2   (lower half only)
+  // which peaks below the centre on its side, fades toward the other, and is
+  // zero with zero slope at the centre line, so the sides keep their vertical
+  // tangents and the joint with the round upper half is smooth.
+  function makeGeom(X, a, b, e) {
+    const w = (th, sg) => {
       const s = Math.sin(th);
-      return s < 0 ? s * s * (1 + q * Math.cos(th)) / 2 : 0;
+      return s < 0 ? s * s * (1 + sg * Math.cos(th)) / 2 : 0;
     };
-    const dw = (th) => {
+    const dw = (th, sg) => {
       const s = Math.sin(th), c = Math.cos(th);
-      return s < 0 ? s * c * (1 + q * c) - q * s * s * s / 2 : 0;
+      return s < 0 ? s * c * (1 + sg * c) - sg * s * s * s / 2 : 0;
     };
+    // net push of the two bulges: sideways (outside minus inside) and down
+    const px = (th) => w(th, 1) - w(th, -1), py = (th) => w(th, 1) + w(th, -1);
+    const dpx = (th) => dw(th, 1) - dw(th, -1), dpy = (th) => dw(th, 1) + dw(th, -1);
     const dP = (th) => ({
-      x: a * (-Math.sin(th) + q * e * dw(th)),
-      y: b * (Math.cos(th) - 0.5 * e * dw(th)),
+      x: a * (-Math.sin(th) + e * dpx(th)),
+      y: b * (Math.cos(th) - 0.5 * e * dpy(th)),
     });
     return {
       X, a, b,
       // point on the hand loop; side = +1 right, -1 left (mirror image)
       P: (th, side) => ({
-        x: side * (X + a * (Math.cos(th) + q * e * w(th))),
-        y: b * (Math.sin(th) - 0.5 * e * w(th)),
+        x: side * (X + a * (Math.cos(th) + e * px(th))),
+        y: b * (Math.sin(th) - 0.5 * e * py(th)),
       }),
       // direction of travel (clockwise for the right hand, mirrored for left)
       T: (th, side) => { const d = dP(th); return { x: -side * d.x, y: -d.y }; },
@@ -216,7 +220,7 @@
     const pattern = patternFor(n);
     const h = Math.max(...pattern);
     const cross = h % 2 === 1;
-    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE, opts.reverse ? 1 : -1);
+    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE);
     const F = (h - D) * B;
 
     const { thT, thC, err } = solveThrow(geom, cross, F);
@@ -300,10 +304,38 @@
   }
 
   // right hand throws on even beats, left on odd
+  //
+  // The loop bends more tightly than a ball's flight, so a hand that kept
+  // strictly to it would meet the ball from the side and the ball would
+  // slide across the paddle as it settled. Just before a catch (and just
+  // after a throw, which is the catch with time reversed) the hand instead
+  // lines up behind the ball's line of flight: the part of its offset across
+  // that line is eased away, so the ball meets the middle of the paddle.
+  // At contact the offset and its rate of change are already zero, so
+  // nothing about the hand-ball handover changes.
   function handPos(m, t, side) {
     const beats = t / m.B - (side === 1 ? 0 : 1) + m.D;
     const tau = mod(beats, 2) * m.B;
-    return m.geom.P(handAngle(m, tau), side);
+    const p = m.geom.P(handAngle(m, tau), side);
+    if (tau < m.Td) return p;
+
+    const W = Math.min(0.35 * m.Te, m.F);     // alignment window
+    const sinceThrow = tau - m.Td, toCatch = 2 * m.B - tau;
+    let ft, from, wgt;
+    if (toCatch < W) {
+      // incoming ball, thrown by the other hand in a cascade
+      ft = m.F - toCatch; from = m.cross ? -side : side; wgt = 1 - toCatch / W;
+    } else if (sinceThrow < W) {
+      ft = sinceThrow; from = side; wgt = 1 - sinceThrow / W;
+    } else return p;
+
+    const ball = flightPos(m, ft, from);
+    const vx = from * m.v0.x, vy = m.v0.y - G * ft, vl = Math.hypot(vx, vy);
+    const dx = vx / vl, dy = vy / vl;
+    const rx = p.x - ball.x, ry = p.y - ball.y;
+    const along = rx * dx + ry * dy;
+    const k = wgt * wgt * (3 - 2 * wgt);      // smoothstep
+    return { x: p.x - k * (rx - along * dx), y: p.y - k * (ry - along * dy) };
   }
 
   // Direction the paddle face points. At the throw it points along the
@@ -347,7 +379,7 @@
   }
 
   if (typeof window === 'undefined') {
-    module.exports = { buildModel, ballsAt, handPos, G };
+    module.exports = { buildModel, ballsAt, handPos, handNormal, G };
     return;
   }
 
