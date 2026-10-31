@@ -553,14 +553,19 @@
 
   // ---------- sound ----------
   //
-  // Every throw and catch rings a note, so the rhythm can be heard: a bright
-  // G for each throw and a softer, shorter C a fifth below for each catch,
-  // both from the C major pentatonic. Each is panned toward the hand doing it.
+  // Every throw and catch makes a sound, so the rhythm can be heard. A throw
+  // is effort building to a release: a tone that swells and slides up from D
+  // to G through the end of the carry, peaks the instant the ball leaves the
+  // hand, then lets go. A catch is an impact: a short, soft C struck as the
+  // ball lands. All three notes are from the C major pentatonic. Each sound
+  // is panned toward the hand making it.
   // Browsers only start audio after a click or key press, so the context is
   // made on the first one.
 
-  const THROW_NOTE = 392.0;    // G4
+  const THROW_NOTE = 392.0;    // G4, reached at the release
+  const THROW_FROM = 293.66;   // D4, where the swell starts
   const CATCH_NOTE = 261.63;   // C4
+  const SWELL_MAX = 0.25;      // longest throw swell (s)
   let audio = null;
 
   function unlockAudio() {
@@ -596,13 +601,38 @@
     }
   }
 
-  // sound every event the animation passed over since the last frame
+  // a pure tone that swells from silence and slides up in pitch over `rise`
+  // seconds to its peak, then falls away over `tail`
+  function swell(from, to, gain, rise, tail, pan) {
+    const { ac, master } = audio, t = ac.currentTime;
+    const env = ac.createGain(), panner = ac.createStereoPanner(), osc = ac.createOscillator();
+    panner.pan.value = pan;
+    osc.connect(env).connect(panner).connect(master);
+    osc.frequency.setValueAtTime(from, t);
+    osc.frequency.exponentialRampToValueAtTime(to, t + rise);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(gain, t + rise);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + rise + tail);
+    osc.start(t);
+    osc.stop(t + rise + tail + 0.05);
+  }
+
+  // Catches sound as the animation passes them. Throws are started early, by
+  // the length of their swell, so the swell peaks on the release: the motion
+  // is known ahead of time, so look that far ahead.
   function playEvents(s0, s1) {
     if (!opts.sound || !audio || audio.ac.state !== 'running') return;
     if (s1 <= s0 || s1 - s0 > 0.25) return;   // stepping back, or a long stall
+    // the swell covers most of the carry, in real seconds
+    const rise = Math.min(SWELL_MAX, 0.8 * model.D * model.B / opts.rate);
+    const ahead = rise * opts.rate;
     for (const e of eventsBetween(model, s0, s1, opts.reverse)) {
-      if (e.kind === 'throw') ring(THROW_NOTE, 0.22, 0.6, 0.5 * e.side);
-      else ring(CATCH_NOTE, 0.16, 0.3, 0.5 * e.side);
+      if (e.kind === 'catch') ring(CATCH_NOTE, 0.16, 0.3, 0.5 * e.side);
+    }
+    for (const e of eventsBetween(model, s0 + ahead, s1 + ahead, opts.reverse)) {
+      if (e.kind === 'throw') {
+        swell(THROW_FROM, THROW_NOTE, 0.2, Math.max(0.01, (e.s - s1) / opts.rate), 0.18, 0.5 * e.side);
+      }
     }
   }
 
