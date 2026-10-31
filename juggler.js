@@ -284,7 +284,7 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { n: 3, reverse: true, dwell: 0, beat: 0.25, rate: 0.5, spacing: 0.4, width: 0.2, depth: 0.1, guides: true, trails: true };
+  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, guides: true, trails: true };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
