@@ -343,8 +343,31 @@
     return out;
   }
 
+  // Throws and catches with display time s in (s0, s1]: { s, kind, id, side }.
+  // Display time runs backwards through the model in the reverse pattern,
+  // which turns each throw into a catch and each catch into a throw.
+  function eventsBetween(m, s0, s1, reverse) {
+    const t0 = reverse ? -s1 : s0, t1 = reverse ? -s0 : s1;
+    const out = [];
+    const add = (t, kind, id, side) => {
+      const s = reverse ? -t : t;
+      if (s > s0 && s <= s1) {
+        const k = reverse ? (kind === 'throw' ? 'catch' : 'throw') : kind;
+        out.push({ s, kind: k, id, side });
+      }
+    };
+    for (let b = Math.floor(t0 / m.B) - m.h - 1; b <= Math.ceil(t1 / m.B) + 1; b++) {
+      const k = m.pattern[mod(b, m.L)];
+      if (k === 0) continue;
+      const id = m.events[mod(b, m.Q) + 2 * m.Q];
+      add(b * m.B, 'throw', id, mod(b, 2) === 0 ? 1 : -1);
+      add((b + k - m.D) * m.B, 'catch', id, mod(b + k, 2) === 0 ? 1 : -1);
+    }
+    return out.sort((a, b) => a.s - b.s);
+  }
+
   if (typeof window === 'undefined') {
-    module.exports = { buildModel, ballsAt, handPos, handNormal, G };
+    module.exports = { buildModel, ballsAt, handPos, handNormal, eventsBetween, G };
     return;
   }
 
@@ -354,7 +377,7 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true };
+  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: true };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -399,6 +422,7 @@
   $('rate').oninput = (e) => { opts.rate = +e.target.value; rebuild(); };
   $('guides').onchange = (e) => { opts.guides = e.target.checked; };
   $('trails').onchange = (e) => { opts.trails = e.target.checked; };
+  $('sound').onchange = (e) => { opts.sound = e.target.checked; if (opts.sound) unlockAudio(); };
   addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' && e.target.type === 'range') return;
     if (e.key === ' ') { paused = !paused; e.preventDefault(); }
@@ -527,10 +551,70 @@
     ctx.globalAlpha = 1;
   }
 
+  // ---------- sound ----------
+  //
+  // Every throw and catch rings a note, so the rhythm can be heard. Each ball
+  // has its own note from a two-octave C major pentatonic, taken every other
+  // step so neighbouring balls sit a third or more apart, and the pattern
+  // plays as a melody. A throw rings bright; a catch rings the same note an
+  // octave down, softer and shorter. Each is panned toward the hand doing it.
+  // Browsers only start audio after a click or key press, so the context is
+  // made on the first one.
+
+  const PENTATONIC = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
+  const noteFor = (id) => PENTATONIC[(id * 2) % PENTATONIC.length];
+  let audio = null;
+
+  function unlockAudio() {
+    if (!audio) {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const master = ac.createGain();
+      master.gain.value = 0.5;
+      master.connect(ac.destination);
+      audio = { ac, master };
+    }
+    if (audio.ac.state === 'suspended') audio.ac.resume();
+  }
+  addEventListener('pointerdown', unlockAudio);
+  addEventListener('keydown', unlockAudio);
+
+  // a soft mallet: a sine with a faint fourth-harmonic ping, quick attack,
+  // exponential decay
+  function ring(freq, gain, decay, pan) {
+    const { ac, master } = audio, t = ac.currentTime;
+    const env = ac.createGain(), panner = ac.createStereoPanner();
+    panner.pan.value = pan;
+    env.connect(panner).connect(master);
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(gain, t + 0.004);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    for (const [mul, amp] of [[1, 1], [4, 0.12]]) {
+      const osc = ac.createOscillator(), g = ac.createGain();
+      osc.frequency.value = freq * mul;
+      g.gain.value = amp;
+      osc.connect(g).connect(env);
+      osc.start(t);
+      osc.stop(t + decay + 0.05);
+    }
+  }
+
+  // sound every event the animation passed over since the last frame
+  function playEvents(s0, s1) {
+    if (!opts.sound || !audio || audio.ac.state !== 'running') return;
+    if (s1 <= s0 || s1 - s0 > 0.25) return;   // stepping back, or a long stall
+    for (const e of eventsBetween(model, s0, s1, opts.reverse)) {
+      const f = noteFor(e.id);
+      if (e.kind === 'throw') ring(f, 0.22, 0.6, 0.5 * e.side);
+      else ring(f / 2, 0.16, 0.3, 0.5 * e.side);
+    }
+  }
+
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
+    const prevT = simT;
     if (!paused) simT += dt * opts.rate;
+    playEvents(prevT, simT);
     updateView(dt);
 
     ctx.fillStyle = color('--bg');
