@@ -445,7 +445,7 @@
       for (let i = 1; i < pts.length; i++) {
         const f = i / (pts.length - 1);           // 0 oldest .. 1 newest
         ctx.globalAlpha = 0.3 * f * f;
-        ctx.lineWidth = 2 * BALL_R * view.s * (0.25 + 0.6 * f);
+        ctx.lineWidth = 2 * BALL_R * view.s;
         ctx.beginPath();
         ctx.moveTo(sx(pts[i - 1].x), sy(pts[i - 1].y));
         ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
