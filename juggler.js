@@ -553,16 +553,14 @@
 
   // ---------- sound ----------
   //
-  // Every throw and catch rings a note, so the rhythm can be heard. Each ball
-  // has its own note from a two-octave C major pentatonic, taken every other
-  // step so neighbouring balls sit a third or more apart, and the pattern
-  // plays as a melody. A throw rings bright; a catch rings the same note an
-  // octave down, softer and shorter. Each is panned toward the hand doing it.
+  // Every throw and catch rings a note, so the rhythm can be heard: a bright
+  // G for each throw and a softer, shorter C a fifth below for each catch,
+  // both from the C major pentatonic. Each is panned toward the hand doing it.
   // Browsers only start audio after a click or key press, so the context is
   // made on the first one.
 
-  const PENTATONIC = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
-  const noteFor = (id) => PENTATONIC[(id * 2) % PENTATONIC.length];
+  const THROW_NOTE = 392.0;    // G4
+  const CATCH_NOTE = 261.63;   // C4
   let audio = null;
 
   function unlockAudio() {
@@ -603,9 +601,8 @@
     if (!opts.sound || !audio || audio.ac.state !== 'running') return;
     if (s1 <= s0 || s1 - s0 > 0.25) return;   // stepping back, or a long stall
     for (const e of eventsBetween(model, s0, s1, opts.reverse)) {
-      const f = noteFor(e.id);
-      if (e.kind === 'throw') ring(f, 0.22, 0.6, 0.5 * e.side);
-      else ring(f / 2, 0.16, 0.3, 0.5 * e.side);
+      if (e.kind === 'throw') ring(THROW_NOTE, 0.22, 0.6, 0.5 * e.side);
+      else ring(CATCH_NOTE, 0.16, 0.3, 0.5 * e.side);
     }
   }
 
