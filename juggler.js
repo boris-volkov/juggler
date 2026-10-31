@@ -179,6 +179,33 @@
     };
   }
 
+  // The empty return swing, when the hand leaves the throw much faster than
+  // it needs to average. It slows gradually while covering most of the way
+  // to the catch, hovers just short of it, then drops away with the
+  // arriving ball:
+  //   speed = w0 (1 - u/u1)^2          brake, over the first part
+  //         + c 6u(1-u)                a slow creep throughout
+  //         + w1 ((u - u2)/(1 - u2))^2 drop into the catch, at the end
+  // Each piece meets zero with zero slope, so the speed stays smooth. The
+  // drop and the creep take fixed shares of the distance and the brake
+  // length u1 absorbs the rest. Returns null when the swing isn't fast
+  // enough at its ends for this shape to fit.
+  function makeReturnSegment(T, A, w0, w1) {
+    const avg = A / T;
+    const creep = 0.08;                                // share of distance
+    const rho = Math.min(0.3, 3 * avg * 0.25 / w1);   // drop: <= 25% of distance
+    const u2 = 1 - rho;
+    const u1 = 3 * (avg * (1 - creep) - w1 * rho / 3) / w0;
+    if (!(u1 > 0.2 && u1 < u2)) return null;
+    const c = avg * creep;
+    return (t) => {
+      const u = Math.min(1, Math.max(0, t / T));
+      const brake = u < u1 ? (u1 / 3) * (1 - Math.pow(1 - u / u1, 3)) : u1 / 3;
+      const drop = u > u2 ? (rho / 3) * Math.pow((u - u2) / rho, 3) : 0;
+      return T * (w0 * brake + w1 * drop + c * (3 * u * u - 2 * u * u * u));
+    };
+  }
+
   // ---------- model ----------
 
   function buildModel(opts) {
@@ -225,7 +252,8 @@
     const Td = D * B, Te = (2 - D) * B;
     // hand speeds that match the ball exactly at catch and throw
     const seg1 = makeSegment(Td, L1, Math.hypot(v1.x, v1.y), Math.hypot(v0.x, v0.y));
-    const seg2 = makeSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y));
+    const seg2 = makeReturnSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y)) ||
+      makeSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y));
 
     // Ball bookkeeping: simulate throws from beat 0, a ball thrown at beat b
     // with height k lands at beat b+k. Ids are steady after the first cycle.
