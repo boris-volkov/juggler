@@ -64,7 +64,6 @@
       }),
       // direction of travel (clockwise for the right hand, mirrored for left)
       T: (th, side) => { const d = dP(th); return { x: -side * d.x, y: -d.y }; },
-      speedFactor: (th) => { const d = dP(th); return Math.hypot(d.x, d.y); },
     };
   }
 
@@ -134,12 +133,12 @@
     return { thT, thC, err: norm(residual(geom, thT, thC, cross, F)) };
   }
 
-  // Angle swept over a segment of duration T and arc A, starting at angular
-  // speed w0 and ending at w1. Linear-ish blend of the end speeds plus a
-  // smooth bump that carries the rest of the arc. The exponent p sharpens the
-  // end contributions when the hand must flick much faster than its average,
-  // so the angular speed never goes negative.
-  function makeSegment(T, A, w0, w1) {
+  // Fallback for makeSegment below: distance covered over a segment of
+  // duration T and length A, starting at speed w0 and ending at w1. Linear-ish
+  // blend of the end speeds plus a smooth bump that carries the rest. The
+  // exponent p sharpens the end contributions when the hand must move much
+  // faster than its average, so the speed never goes negative.
+  function makeSharpSegment(T, A, w0, w1) {
     const avg = A / T;
     const p = Math.max(1, (w0 + w1) / (0.75 * avg) - 1);
     const c = avg - (w0 + w1) / (p + 1);
@@ -147,6 +146,36 @@
     return (t) => {
       const u = Math.min(1, Math.max(0, t / T));
       return T * (w0 * (1 - Math.pow(1 - u, q)) / q + w1 * Math.pow(u, q) / q + c * (3 * u * u - 2 * u * u * u));
+    };
+  }
+
+  // Distance covered over a segment of duration T and length A, starting at
+  // speed w0 and ending at w1, with the speed changing as gradually as it
+  // can. The speed is r(u)^2 with r quadratic: r runs from sqrt(w0) to
+  // sqrt(w1) and its curvature m is the smallest that makes the distance
+  // come out right. Squaring keeps the speed from going negative, and a
+  // single smooth dip (or rise) spreads the slowing-down over the whole
+  // segment instead of dumping it right after the release. Falls back to
+  // the sharper profile only if no such dip stays positive.
+  function makeSegment(T, A, w0, w1) {
+    const avg = A / T;
+    const r0 = Math.sqrt(w0), r1 = Math.sqrt(w1);
+    // integral of r^2 over [0,1] as a quadratic in m
+    const qa = 1 / 30, qb = (r0 + r1) / 6, qc = (r0 * r0 + r0 * r1 + r1 * r1) / 3 - avg;
+    const disc = qb * qb - 4 * qa * qc;
+    if (disc < 0) return makeSharpSegment(T, A, w0, w1);
+    const m = (-qb + Math.sqrt(disc)) / (2 * qa);
+    // r(u) = al + be*u + ga*u^2
+    const al = r0, be = r1 - r0 + m, ga = -m;
+    const uStar = ga !== 0 ? -be / (2 * ga) : -1;
+    if (uStar > 0 && uStar < 1 && al + be * uStar + ga * uStar * uStar < 0) {
+      return makeSharpSegment(T, A, w0, w1);
+    }
+    return (t) => {
+      const u = Math.min(1, Math.max(0, t / T));
+      const u2 = u * u, u3 = u2 * u;
+      return T * (al * al * u + al * be * u2 + (be * be + 2 * al * ga) * u3 / 3 +
+        be * ga * u3 * u / 2 + ga * ga * u3 * u2 / 5);
     };
   }
 
@@ -178,14 +207,25 @@
     const nT = Math.atan2(v0.y, v0.x);
     const nC = Math.atan2(-vc.y, -vc.x);
 
-    // hand angular speeds that match the ball exactly at catch and throw
-    const wT = Math.hypot(v0.x, v0.y) / geom.speedFactor(thT);
-    const wC = Math.hypot(v1.x, v1.y) / geom.speedFactor(thC);
-    const A1 = mod(thC - thT, TAU);           // clockwise arc, catch -> throw (holding)
-    const A2 = TAU - A1;                       // throw -> catch (empty)
+    // The hand is timed by distance along its loop, so its speed profile is
+    // its real speed. arc[i] is the length from the catch point, going
+    // clockwise, to angle thC - TAU*i/N.
+    const N = 2048, arc = new Float64Array(N + 1);
+    for (let i = 1; i <= N; i++) {
+      const p = geom.P(thC - TAU * (i - 1) / N, 1), q = geom.P(thC - TAU * i / N, 1);
+      arc[i] = arc[i - 1] + Math.hypot(q.x - p.x, q.y - p.y);
+    }
+    const arcAt = (phi) => {
+      const f = phi / TAU * N, i = Math.min(N - 1, Math.floor(f));
+      return arc[i] + (arc[i + 1] - arc[i]) * (f - i);
+    };
+    const A1 = mod(thC - thT, TAU);           // clockwise angle, catch -> throw (holding)
+    const L1 = arcAt(A1);                     // ... and its length
+    const L2 = arc[N] - L1;                   // throw -> catch (empty)
     const Td = D * B, Te = (2 - D) * B;
-    const seg1 = makeSegment(Td, A1, wC, wT);
-    const seg2 = makeSegment(Te, A2, wT, wC);
+    // hand speeds that match the ball exactly at catch and throw
+    const seg1 = makeSegment(Td, L1, Math.hypot(v1.x, v1.y), Math.hypot(v0.x, v0.y));
+    const seg2 = makeSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y));
 
     // Ball bookkeeping: simulate throws from beat 0, a ball thrown at beat b
     // with height k lands at beat b+k. Ids are steady after the first cycle.
@@ -216,14 +256,19 @@
     return {
       n, h, pattern, cross, geom, D, B, F, thT, thC, pT, pC, v0, v1, apex, err,
       extent,
-      A1, A2, Td, Te, seg1, seg2, Q, events, L, nT, nC,
+      A1, L1, L2, arc, Td, Te, seg1, seg2, Q, events, L, nT, nC,
     };
   }
 
   // hand angle at time tau since its last catch, tau in [0, 2B)
   function handAngle(m, tau) {
-    if (tau < m.Td) return m.thC - m.seg1(tau);
-    return m.thC - m.A1 - m.seg2(tau - m.Td);
+    const s = tau < m.Td ? m.seg1(tau) : m.L1 + m.seg2(tau - m.Td);
+    // invert the arc-length table
+    const arc = m.arc, N = arc.length - 1;
+    let lo = 0, hi = N;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (arc[mid] <= s) lo = mid; else hi = mid; }
+    const f = lo + Math.min(1, Math.max(0, (s - arc[lo]) / (arc[hi] - arc[lo] || 1)));
+    return m.thC - TAU * f / N;
   }
 
   // right hand throws on even beats, left on odd
@@ -242,8 +287,8 @@
     const tau = mod(beats, 2) * m.B;
     const wrap = (a) => mod(a + Math.PI, TAU) - Math.PI;
     const ang = tau < m.Td
-      ? m.nC + wrap(m.nT - m.nC) * m.seg1(tau) / m.A1
-      : m.nT + wrap(m.nC - m.nT) * m.seg2(tau - m.Td) / m.A2;
+      ? m.nC + wrap(m.nT - m.nC) * m.seg1(tau) / m.L1
+      : m.nT + wrap(m.nC - m.nT) * m.seg2(tau - m.Td) / m.L2;
     return { x: side * Math.cos(ang), y: Math.sin(ang) };
   }
 
