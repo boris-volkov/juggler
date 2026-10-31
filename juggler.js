@@ -4,10 +4,10 @@
 // Each hand moves around a loop. The ball path is smooth everywhere: every
 // flight parabola leaves one hand loop tangentially (same direction and
 // speed as the hand) and arrives at the next loop tangentially, then rides
-// the bottom of that loop until the next throw. The only break is in speed
-// at a catch, where the hand meets the ball a little slower and the impact
-// takes up the difference. In a cascade the two parabolas plus the two
-// carries form the figure-8; the loops touch it along its two low points.
+// the bottom of that loop until the next throw. (CATCH_GIVE below 1 lets the
+// hand meet a ball slower than it falls, with the impact taking up the
+// difference.) In a cascade the two parabolas plus the two carries form the
+// figure-8; the loops touch it along its two low points.
 //
 // The solver works in the "standard" sense (right hand turns clockwise,
 // throws inside, catches outside). The time-reverse of a gravity parabola
@@ -20,7 +20,7 @@
   const G = 9.81;
   const BALL_R = 0.024;
   const MIN_DWELL = 0.08;    // beats
-  const CATCH_GIVE = 0.6;    // hand speed at a catch, as a share of the ball's
+  const CATCH_GIVE = 1;      // hand speed at a catch, as a share of the ball's
   const BULGE = 0.3;         // bottom bulges of the hand loops (throw and catch sides)
   const TAU = Math.PI * 2;
 
@@ -45,7 +45,14 @@
   // which peaks below the centre on its side, fades toward the other, and is
   // zero with zero slope at the centre line, so the sides keep their vertical
   // tangents and the joint with the round upper half is smooth.
-  function makeGeom(X, a, b, e) {
+  //
+  // The upper outside quarter is then pulled up by `rise` metres with the
+  // same kind of push, mirrored into the upper half. That lengthens the empty
+  // hand's swing, so it can leave a throw and meet a catch at the ball's own
+  // speed without stalling in between. Throwing inside, it is the hand
+  // reaching up to meet the ball (and catching it a little higher); throwing
+  // outside, the same shape run backwards, it is the follow-through.
+  function makeGeom(X, a, b, e, rise) {
     const w = (th, sg) => {
       const s = Math.sin(th);
       return s < 0 ? s * s * (1 + sg * Math.cos(th)) / 2 : 0;
@@ -57,16 +64,18 @@
     // net push of the two bulges: sideways (outside minus inside) and down
     const px = (th) => w(th, 1) - w(th, -1), py = (th) => w(th, 1) + w(th, -1);
     const dpx = (th) => dw(th, 1) - dw(th, -1), dpy = (th) => dw(th, 1) + dw(th, -1);
+    // the catching side's rise: w mirrored into the upper half
+    const up = (th) => w(-th, 1), dup = (th) => -dw(-th, 1);
     const dP = (th) => ({
       x: a * (-Math.sin(th) + e * dpx(th)),
-      y: b * (Math.cos(th) - 0.5 * e * dpy(th)),
+      y: b * (Math.cos(th) - 0.5 * e * dpy(th)) + rise * dup(th),
     });
     return {
       X, a, b,
       // point on the hand loop; side = +1 right, -1 left (mirror image)
       P: (th, side) => ({
         x: side * (X + a * (Math.cos(th) + e * px(th))),
-        y: b * (Math.sin(th) - 0.5 * e * py(th)),
+        y: b * (Math.sin(th) - 0.5 * e * py(th)) + rise * up(th),
       }),
       // direction of travel (clockwise for the right hand, mirrored for left)
       T: (th, side) => { const d = dP(th); return { x: -side * d.x, y: -d.y }; },
@@ -83,6 +92,8 @@
     const pC = geom.P(thC, side), dC = geom.T(thC, side);
     const s0 = dT.y / dT.x, s1 = dC.y / dC.x;
     const dx = pC.x - pT.x, dy = pC.y - pT.y;
+    // the ball must leave and arrive moving the same way as the hands
+    if (Math.sign(dT.x) !== Math.sign(dx) || Math.sign(dC.x) !== Math.sign(dx)) return [1e3, 1e3];
     return [
       (dy - (s0 + s1) * dx / 2) / Math.abs(dx),
       (dx * (s0 - s1) / G - F * F) / (F * F),
@@ -195,7 +206,7 @@
     const pattern = patternFor(n);
     const h = Math.max(...pattern);
     const cross = h % 2 === 1;
-    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE);
+    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE, opts.reach);
     const F = (h - D) * B;
 
     const { thT, thC, err } = solveThrow(geom, cross, F);
@@ -230,11 +241,12 @@
     const L2 = arc[N] - L1;                   // throw -> catch (empty)
     const Td = D * B, Te = (2 - D) * B;
     // Hand speeds at the two ends of the carry. A throw has to match the
-    // ball: it leaves at the hand's speed. A catch doesn't: the hand meets
+    // ball: it leaves at the hand's speed. A catch needn't: the hand meets
     // the ball at CATCH_GIVE of its speed and the rest goes in the impact.
-    // Asking it to match the falling ball too would force it to all but
-    // stop somewhere on the short return swing. In the reverse pattern the
-    // standard throw point is where catches happen, so the give swaps ends.
+    // Matching fully used to force the hand to all but stop on a short
+    // return swing; the reach on the loop's outside now gives it room. In
+    // the reverse pattern the standard throw point is where catches happen,
+    // so the give swaps ends.
     const sT = Math.hypot(v0.x, v0.y) * (opts.reverse ? CATCH_GIVE : 1);
     const sC = Math.hypot(v1.x, v1.y) * (opts.reverse ? 1 : CATCH_GIVE);
     const seg1 = makeSegment(Td, L1, sC, sT);
@@ -342,7 +354,7 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, guides: true, trails: true };
+  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.25, guides: true, trails: true };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -365,6 +377,7 @@
     $('spacingVal').textContent = cm(opts.spacing);
     $('widthVal').textContent = cm(width);
     $('depthVal').textContent = cm(opts.depth);
+    $('riseVal').textContent = cm(opts.reach);
     const kind = model.cross ? 'cascade' : 'fountain';
     const name = model.cross ? (opts.reverse ? 'reverse ' : '') + kind : kind + (opts.reverse ? ' (reverse)' : '');
     $('stats').textContent =
@@ -381,6 +394,7 @@
   $('spacing').oninput = (e) => { opts.spacing = +e.target.value; rebuild(); };
   $('width').oninput = (e) => { opts.width = +e.target.value; rebuild(); };
   $('depth').oninput = (e) => { opts.depth = +e.target.value; rebuild(); };
+  $('rise').oninput = (e) => { opts.reach = +e.target.value; rebuild(); };
   $('beat').oninput = (e) => { opts.beat = +e.target.value; rebuild(); };
   $('rate').oninput = (e) => { opts.rate = +e.target.value; rebuild(); };
   $('guides').onchange = (e) => { opts.guides = e.target.checked; };
