@@ -1,12 +1,13 @@
 // Juggling simulation.
 //
 // World units are metres and seconds, y points up, gravity is real (9.81).
-// Each hand moves around an ellipse. The ball path is built so that it is
-// C1-continuous everywhere: every flight parabola leaves one hand ellipse
-// tangentially (same direction AND speed as the hand) and arrives at the
-// next hand ellipse tangentially, then rides the bottom of that ellipse
-// until the next throw. In a cascade the two parabolas plus the two dwell
-// arcs form the figure-8; the ellipses touch it along its two low points.
+// Each hand moves around a loop. The ball path is smooth everywhere: every
+// flight parabola leaves one hand loop tangentially (same direction and
+// speed as the hand) and arrives at the next loop tangentially, then rides
+// the bottom of that loop until the next throw. The only break is in speed
+// at a catch, where the hand meets the ball a little slower and the impact
+// takes up the difference. In a cascade the two parabolas plus the two
+// carries form the figure-8; the loops touch it along its two low points.
 //
 // The solver works in the "standard" sense (right hand turns clockwise,
 // throws inside, catches outside). The time-reverse of a gravity parabola
@@ -19,6 +20,7 @@
   const G = 9.81;
   const BALL_R = 0.024;
   const MIN_DWELL = 0.08;    // beats
+  const CATCH_GIVE = 0.6;    // hand speed at a catch, as a share of the ball's
   const BULGE = 0.3;         // bottom bulges of the hand loops (throw and catch sides)
   const TAU = Math.PI * 2;
 
@@ -183,33 +185,6 @@
     };
   }
 
-  // The empty return swing, when the hand leaves the throw much faster than
-  // it needs to average. It slows gradually while covering most of the way
-  // to the catch, hovers just short of it, then drops away with the
-  // arriving ball:
-  //   speed = w0 (1 - u/u1)^2          brake, over the first part
-  //         + c 6u(1-u)                a slow creep throughout
-  //         + w1 ((u - u2)/(1 - u2))^2 drop into the catch, at the end
-  // Each piece meets zero with zero slope, so the speed stays smooth. The
-  // drop and the creep take fixed shares of the distance and the brake
-  // length u1 absorbs the rest. Returns null when the swing isn't fast
-  // enough at its ends for this shape to fit.
-  function makeReturnSegment(T, A, w0, w1) {
-    const avg = A / T;
-    const creep = 0.08;                                // share of distance
-    const rho = Math.min(0.3, 3 * avg * 0.25 / w1);   // drop: <= 25% of distance
-    const u2 = 1 - rho;
-    const u1 = 3 * (avg * (1 - creep) - w1 * rho / 3) / w0;
-    if (!(u1 > 0.2 && u1 < u2)) return null;
-    const c = avg * creep;
-    return (t) => {
-      const u = Math.min(1, Math.max(0, t / T));
-      const brake = u < u1 ? (u1 / 3) * (1 - Math.pow(1 - u / u1, 3)) : u1 / 3;
-      const drop = u > u2 ? (rho / 3) * Math.pow((u - u2) / rho, 3) : 0;
-      return T * (w0 * brake + w1 * drop + c * (3 * u * u - 2 * u * u * u));
-    };
-  }
-
   // ---------- model ----------
 
   function buildModel(opts) {
@@ -254,10 +229,16 @@
     const L1 = arcAt(A1);                     // ... and its length
     const L2 = arc[N] - L1;                   // throw -> catch (empty)
     const Td = D * B, Te = (2 - D) * B;
-    // hand speeds that match the ball exactly at catch and throw
-    const seg1 = makeSegment(Td, L1, Math.hypot(v1.x, v1.y), Math.hypot(v0.x, v0.y));
-    const seg2 = makeReturnSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y)) ||
-      makeSegment(Te, L2, Math.hypot(v0.x, v0.y), Math.hypot(v1.x, v1.y));
+    // Hand speeds at the two ends of the carry. A throw has to match the
+    // ball: it leaves at the hand's speed. A catch doesn't: the hand meets
+    // the ball at CATCH_GIVE of its speed and the rest goes in the impact.
+    // Asking it to match the falling ball too would force it to all but
+    // stop somewhere on the short return swing. In the reverse pattern the
+    // standard throw point is where catches happen, so the give swaps ends.
+    const sT = Math.hypot(v0.x, v0.y) * (opts.reverse ? CATCH_GIVE : 1);
+    const sC = Math.hypot(v1.x, v1.y) * (opts.reverse ? 1 : CATCH_GIVE);
+    const seg1 = makeSegment(Td, L1, sC, sT);
+    const seg2 = makeSegment(Te, L2, sT, sC);
 
     // Ball bookkeeping: simulate throws from beat 0, a ball thrown at beat b
     // with height k lands at beat b+k. Ids are steady after the first cycle.
@@ -304,38 +285,10 @@
   }
 
   // right hand throws on even beats, left on odd
-  //
-  // The loop bends more tightly than a ball's flight, so a hand that kept
-  // strictly to it would meet the ball from the side and the ball would
-  // slide across the paddle as it settled. Just before a catch (and just
-  // after a throw, which is the catch with time reversed) the hand instead
-  // lines up behind the ball's line of flight: the part of its offset across
-  // that line is eased away, so the ball meets the middle of the paddle.
-  // At contact the offset and its rate of change are already zero, so
-  // nothing about the hand-ball handover changes.
   function handPos(m, t, side) {
     const beats = t / m.B - (side === 1 ? 0 : 1) + m.D;
     const tau = mod(beats, 2) * m.B;
-    const p = m.geom.P(handAngle(m, tau), side);
-    if (tau < m.Td) return p;
-
-    const W = Math.min(0.35 * m.Te, m.F);     // alignment window
-    const sinceThrow = tau - m.Td, toCatch = 2 * m.B - tau;
-    let ft, from, wgt;
-    if (toCatch < W) {
-      // incoming ball, thrown by the other hand in a cascade
-      ft = m.F - toCatch; from = m.cross ? -side : side; wgt = 1 - toCatch / W;
-    } else if (sinceThrow < W) {
-      ft = sinceThrow; from = side; wgt = 1 - sinceThrow / W;
-    } else return p;
-
-    const ball = flightPos(m, ft, from);
-    const vx = from * m.v0.x, vy = m.v0.y - G * ft, vl = Math.hypot(vx, vy);
-    const dx = vx / vl, dy = vy / vl;
-    const rx = p.x - ball.x, ry = p.y - ball.y;
-    const along = rx * dx + ry * dy;
-    const k = wgt * wgt * (3 - 2 * wgt);      // smoothstep
-    return { x: p.x - k * (rx - along * dx), y: p.y - k * (ry - along * dy) };
+    return m.geom.P(handAngle(m, tau), side);
   }
 
   // Direction the paddle face points. At the throw it points along the
