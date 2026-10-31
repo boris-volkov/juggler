@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Juggler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="stage"></canvas>
+
+  <div id="panel">
+    <div class="row">
+      <span class="label">Balls</span>
+      <button id="fewer" aria-label="Fewer balls">−</button>
+      <span id="count">3</span>
+      <button id="more" aria-label="More balls">+</button>
+    </div>
+    <div class="row">
+      <span class="label">Throw</span>
+      <button id="style" class="wide">outside</button>
+    </div>
+    <label class="row">
+      <span class="label">Dwell</span>
+      <input id="dwell" type="range" min="0" max="1.8" step="0.05" value="0">
+      <span id="dwellVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Spacing</span>
+      <input id="spacing" type="range" min="0.2" max="0.8" step="0.01" value="0.4">
+      <span id="spacingVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Width</span>
+      <input id="width" type="range" min="0.06" max="0.4" step="0.01" value="0.2">
+      <span id="widthVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Depth</span>
+      <input id="depth" type="range" min="0.02" max="0.25" step="0.01" value="0.1">
+      <span id="depthVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Tempo</span>
+      <input id="beat" type="range" min="0.18" max="0.5" step="0.01" value="0.25">
+      <span id="beatVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Speed</span>
+      <input id="rate" type="range" min="0.05" max="1.5" step="0.05" value="0.5">
+      <span id="rateVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Paths</span>
+      <input id="guides" type="checkbox" checked>
+    </label>
+    <label class="row">
+      <span class="label">Trails</span>
+      <input id="trails" type="checkbox" checked>
+    </label>
+    <div id="stats"></div>
+    <div class="hint">space pause · 1–9 balls · ← → step</div>
+  </div>
+
+  <script src="juggler.js"></script>
+</body>
+</html>

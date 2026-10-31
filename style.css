@@ -1,0 +1,98 @@
+:root {
+  --bg: #f6f4ef;
+  --ink: #1d1d1f;
+  --muted: #8a877f;
+  --guide: rgba(29, 29, 31, 0.16);
+  --path: rgba(29, 29, 31, 0.32);
+  --panel: rgba(246, 244, 239, 0.85);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121214;
+    --ink: #ecebe6;
+    --muted: #7d7b75;
+    --guide: rgba(236, 235, 230, 0.14);
+    --path: rgba(236, 235, 230, 0.3);
+    --panel: rgba(18, 18, 20, 0.85);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+}
+
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+#panel {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+  user-select: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+}
+
+.label {
+  width: 52px;
+  color: var(--muted);
+}
+
+.val {
+  width: 44px;
+  text-align: right;
+  color: var(--muted);
+}
+
+#count {
+  width: 20px;
+  text-align: center;
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--guide);
+  border-radius: 4px;
+  width: 26px;
+  height: 22px;
+  cursor: pointer;
+}
+button.wide { width: auto; padding: 0 10px; }
+button:hover { border-color: var(--path); }
+
+input[type="range"] { width: 120px; accent-color: var(--ink); }
+input[type="checkbox"] { accent-color: var(--ink); }
+
+#stats {
+  margin-top: 8px;
+  color: var(--muted);
+  white-space: pre;
+}
+
+.hint {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
