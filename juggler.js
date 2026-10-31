@@ -33,30 +33,33 @@
 
   // ---------- geometry ----------
 
-  // Hand loop: an ellipse with its outer-bottom quarter pushed out and down,
-  // like a racing line swinging wide through a U-turn. The push is
-  //   w = sin^2(th) * (1 + cos th) / 2   (lower half only)
-  // which peaks below and outside the centre, fades toward the inside, and
-  // is zero with zero slope at the centre line, so the sides keep their
-  // vertical tangents and the joint with the round upper half is smooth.
-  function makeGeom(X, a, b, e) {
+  // Hand loop: an ellipse with one bottom quarter pushed out and down, like
+  // a racing line swinging wide through a U-turn. The bulge sits on the
+  // throwing side (q = +1 outside, -1 inside), just before the throw, so the
+  // hand has a longer run to accelerate along the throw. The push is
+  //   w = sin^2(th) * (1 + q cos th) / 2   (lower half only)
+  // which peaks below the centre on the throwing side, fades toward the
+  // other side, and is zero with zero slope at the centre line, so the sides
+  // keep their vertical tangents and the joint with the round upper half is
+  // smooth.
+  function makeGeom(X, a, b, e, q) {
     const w = (th) => {
       const s = Math.sin(th);
-      return s < 0 ? s * s * (1 + Math.cos(th)) / 2 : 0;
+      return s < 0 ? s * s * (1 + q * Math.cos(th)) / 2 : 0;
     };
     const dw = (th) => {
       const s = Math.sin(th), c = Math.cos(th);
-      return s < 0 ? s * c * (1 + c) - s * s * s / 2 : 0;
+      return s < 0 ? s * c * (1 + q * c) - q * s * s * s / 2 : 0;
     };
     const dP = (th) => ({
-      x: a * (-Math.sin(th) + e * dw(th)),
+      x: a * (-Math.sin(th) + q * e * dw(th)),
       y: b * (Math.cos(th) - 0.5 * e * dw(th)),
     });
     return {
       X, a, b,
       // point on the hand loop; side = +1 right, -1 left (mirror image)
       P: (th, side) => ({
-        x: side * (X + a * (Math.cos(th) + e * w(th))),
+        x: side * (X + a * (Math.cos(th) + q * e * w(th))),
         y: b * (Math.sin(th) - 0.5 * e * w(th)),
       }),
       // direction of travel (clockwise for the right hand, mirrored for left)
@@ -157,7 +160,7 @@
     const pattern = patternFor(n);
     const h = Math.max(...pattern);
     const cross = h % 2 === 1;
-    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE);
+    const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE, opts.reverse ? 1 : -1);
     const F = (h - D) * B;
 
     const { thT, thC, err } = solveThrow(geom, cross, F);
