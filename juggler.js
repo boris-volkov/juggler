@@ -454,7 +454,7 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { n: 3, pattern: patternFor(3), reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
+  const opts = { pattern: patternFor(3), reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -470,7 +470,6 @@
       depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate };
     for (const [id, v] of Object.entries(values)) $(id).value = v;
     for (const id of ['guides', 'trails', 'sound']) $(id).checked = opts[id];
-    $('siteswap').value = opts.pattern.join('');
   }
 
   function rebuild() {
@@ -500,25 +499,55 @@
       `shape ${cm(model.extent.w)} wide × ${cm(model.extent.h)} tall`;
   }
 
-  function setBalls(n) {
-    opts.n = n;
-    opts.pattern = patternFor(n);
-    $('siteswap').value = opts.pattern.join('');
-    $('siteswap').classList.remove('bad');
-    rebuild();
+  // Patterns offered for each number of balls, the basic one first. The ball
+  // count picks the list; the menu picks from it, or "custom" opens a box
+  // for any siteswap, which then sets the ball count to match.
+  const PRESETS = {
+    1: [['300', 'one ball']],
+    2: [['330', 'cascade'], ['40', 'one-hand fountain'], ['420', '420']],
+    3: [['3', 'cascade'], ['423', '423'], ['42', 'two in one hand'], ['522', '522'], ['504', '504'], ['60', 'three in one hand']],
+    4: [['4', 'fountain'], ['53', 'half shower'], ['534', '534'], ['552', '552'], ['633', '633'], ['642', '642']],
+    5: [['5', 'cascade'], ['64', '64'], ['645', '645'], ['663', '663'], ['744', '744'], ['753', '753']],
+    6: [['6', 'fountain'], ['75', 'half shower'], ['855', '855']],
+    7: [['7', 'cascade'], ['86', '86']],
+    8: [['8', 'fountain'], ['97', 'half shower']],
+    9: [['9', 'cascade']],
+  };
+
+  function fillPatterns() {
+    const menu = $('pattern'), ss = opts.pattern.join('');
+    const list = PRESETS[model.n] || [];
+    menu.innerHTML = '';
+    for (const [value, label] of list) menu.add(new Option(label === value ? value : `${value}  ${label}`, value));
+    menu.add(new Option('custom…', 'custom'));
+    const preset = list.some(([v]) => v === ss);
+    menu.value = preset ? ss : 'custom';
+    $('customRow').hidden = preset;
+    if (!preset) $('siteswap').value = ss;
   }
-  function setSiteswap() {
-    const box = $('siteswap'), r = parseSiteswap(box.value);
-    box.classList.toggle('bad', !!r.error);
-    box.title = r.error || '';
-    if (r.error) return;
-    opts.pattern = r.pattern;
-    opts.n = r.n;
+
+  function setPattern(pattern) {
+    opts.pattern = pattern;
     rebuild();
+    fillPatterns();
   }
+  const setBalls = (n) => setPattern(parseSiteswap(PRESETS[n][0][0]).pattern);
+
   $('fewer').onclick = () => setBalls(Math.max(1, model.n - 1));
   $('more').onclick = () => setBalls(Math.min(9, model.n + 1));
-  $('siteswap').onchange = setSiteswap;
+  $('pattern').onchange = (e) => {
+    if (e.target.value !== 'custom') { setPattern(parseSiteswap(e.target.value).pattern); return; }
+    $('customRow').hidden = false;
+    $('siteswap').value = opts.pattern.join('');
+    $('siteswap').focus();
+    $('siteswap').select();
+  };
+  $('siteswap').onchange = () => {
+    const box = $('siteswap'), r = parseSiteswap(box.value);
+    box.classList.toggle('bad', !!r.error);
+    $('customError').textContent = r.error || '';
+    if (!r.error) setPattern(r.pattern);
+  };
   $('siteswap').onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
   $('style').onclick = () => { opts.reverse = !opts.reverse; rebuild(); };
   $('dwell').oninput = (e) => { opts.dwell = +e.target.value; rebuild(); };
@@ -790,5 +819,6 @@
 
   syncControls();
   rebuild();
+  fillPatterns();
   requestAnimationFrame(frame);
 })();

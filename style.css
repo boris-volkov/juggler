@@ -83,6 +83,7 @@ button.wide { width: auto; padding: 0 10px; }
 button:hover { border-color: var(--path); }
 
 input[type="range"] { width: 120px; accent-color: var(--ink); }
+select,
 input[type="text"] {
   font: inherit;
   color: var(--ink);
@@ -93,8 +94,13 @@ input[type="text"] {
   height: 22px;
   padding: 0 6px;
 }
+select:focus,
 input[type="text"]:focus { outline: none; border-color: var(--path); }
 input[type="text"].bad { border-color: #e4572e; }
+select { padding: 0 2px; cursor: pointer; }
+select option { background: var(--bg); color: var(--ink); }
+.row[hidden] { display: none; }
+.err { color: #e4572e; font-size: 11px; white-space: nowrap; }
 input[type="checkbox"] { accent-color: var(--ink); }
 
 #stats {

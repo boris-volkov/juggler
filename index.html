@@ -18,22 +18,12 @@
     </div>
     <div class="row">
       <span class="label">Pattern</span>
-      <input id="siteswap" type="text" list="patterns" value="3" spellcheck="false" autocomplete="off" aria-label="Siteswap">
-      <datalist id="patterns">
-        <option value="3">3-ball cascade</option>
-        <option value="4">4-ball fountain</option>
-        <option value="5">5-ball cascade</option>
-        <option value="42">3: two in one hand</option>
-        <option value="423">3: 423</option>
-        <option value="633">4: 633</option>
-        <option value="534">4: 534</option>
-        <option value="552">4: 552</option>
-        <option value="645">5: 645</option>
-        <option value="744">5: 744</option>
-        <option value="753">5: 753</option>
-        <option value="330">2-ball cascade</option>
-        <option value="300">1 ball</option>
-      </datalist>
+      <select id="pattern" aria-label="Pattern"></select>
+    </div>
+    <div class="row" id="customRow" hidden>
+      <span class="label">Siteswap</span>
+      <input id="siteswap" type="text" spellcheck="false" autocomplete="off" aria-label="Siteswap">
+      <span id="customError" class="err"></span>
     </div>
     <div class="row">
       <span class="label">Throw</span>
