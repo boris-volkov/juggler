@@ -23,6 +23,7 @@
   const CATCH_GIVE = 1;      // hand speed at a catch, as a share of the ball's
   const BULGE = 0.3;         // bottom bulges of the hand loops (throw and catch sides)
   const TAU = Math.PI * 2;
+  const REST_TH = -Math.PI / 2;  // bottom of the hand loop, where an idle hand waits
 
   const mod = (x, m) => ((x % m) + m) % m;
 
@@ -198,65 +199,141 @@
 
   // ---------- model ----------
 
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const lcm = (a, b) => a / gcd(a, b) * b;
+
+  // A siteswap is valid when its throws land on distinct beats, which also
+  // makes the average a whole number: the number of balls. 1s (a ball
+  // handed straight across) aren't supported yet: they have no time to fly.
+  function parseSiteswap(text) {
+    const s = text.trim();
+    if (!/^[0-9]+$/.test(s)) return { error: 'use digits 0-9' };
+    const p = [...s].map(Number), L = p.length;
+    if (p.includes(1)) return { error: '1s (hand-across passes) not supported yet' };
+    if (Math.max(...p) < 3) return { error: 'needs a throw of 3 or more' };
+    const lands = new Set(p.map((k, i) => (i + k) % L));
+    if (lands.size !== L) return { error: 'throws collide' };
+    const sum = p.reduce((a, b) => a + b, 0);
+    if (sum % L) return { error: 'not a whole number of balls' };
+    return { pattern: p, n: sum / L };
+  }
+
   function buildModel(opts) {
-    const { n, beat: B } = opts;
+    const B = opts.beat;
     // A ball can't jump from the catch point to the throw point in zero
     // time, so "no dwell" means the shortest carry: a quick hairpin.
     const D = Math.max(MIN_DWELL, opts.dwell);
-    const pattern = patternFor(n);
+    // Throwing outside is shown as the model run backwards in time. Run
+    // backwards, a throw from beat b landing at b + k becomes a throw of the
+    // same height from beat -(b + k), so build that pattern then.
+    const L = opts.pattern.length;
+    let pattern = opts.pattern;
+    if (opts.reverse) {
+      pattern = new Array(L).fill(0);
+      opts.pattern.forEach((k, i) => { if (k > 0) pattern[mod(-(i + k), L)] = k; });
+    }
+    const n = pattern.reduce((a, b) => a + b, 0) / L;
     const h = Math.max(...pattern);
-    const cross = h % 2 === 1;
     const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE, opts.reach);
-    const F = (h - D) * B;
 
-    const { thT, thC, err } = solveThrow(geom, cross, F);
-    const pT = geom.P(thT, 1);
-    const pC = geom.P(thC, cross ? -1 : 1);
-    const dT = geom.T(thT, 1);
-    const vx = (pC.x - pT.x) / F;
-    const v0 = { x: vx, y: vx * dT.y / dT.x };
-    const v1 = { x: vx, y: v0.y - G * F };
-    const apex = pT.y + (v0.y > 0 ? v0.y * v0.y / (2 * G) : 0);
+    // One tangent flight for each throw height of 3 or more: odd heights
+    // cross to the other hand, even ones come back to the thrower. Solved
+    // for the right hand; the left is its mirror image.
+    const types = {};
+    let err = 0, apex = -Infinity;
+    for (const k of new Set(pattern)) {
+      if (k < 3) continue;
+      const cross = k % 2 === 1, F = (k - D) * B;
+      const sol = solveThrow(geom, cross, F);
+      const pT = geom.P(sol.thT, 1);
+      const pC = geom.P(sol.thC, cross ? -1 : 1);
+      const dT = geom.T(sol.thT, 1);
+      const vx = (pC.x - pT.x) / F;
+      const v0 = { x: vx, y: vx * dT.y / dT.x };
+      const v1 = { x: vx, y: v0.y - G * F };
+      // arrival at the right hand is the mirror image when the throw crosses
+      const vc = cross ? { x: -v1.x, y: v1.y } : v1;
+      const top = pT.y + (v0.y > 0 ? v0.y * v0.y / (2 * G) : 0);
+      types[k] = {
+        k, cross, F, thT: sol.thT, thC: sol.thC, pT, v0, v1, apex: top,
+        // paddle face directions: along the launch, and back up the arrival
+        nT: Math.atan2(v0.y, v0.x), nC: Math.atan2(-vc.y, -vc.x),
+        // Hand speeds at the ends of a carry. A throw has to match the ball:
+        // it leaves at the hand's speed. A catch needn't: the hand meets the
+        // ball at CATCH_GIVE of its speed and the rest goes in the impact.
+        // In the reverse pattern the standard throw point is where catches
+        // happen, so the give swaps ends.
+        sT: Math.hypot(v0.x, v0.y) * (opts.reverse ? CATCH_GIVE : 1),
+        sC: Math.hypot(v1.x, v1.y) * (opts.reverse ? 1 : CATCH_GIVE),
+      };
+      err = Math.max(err, sol.err);
+      apex = Math.max(apex, top);
+    }
 
-    // paddle face directions: along the launch, and back up the arrival
-    // (arrival at the right hand is the mirror image when the throw crosses)
-    const vc = cross ? { x: -v1.x, y: v1.y } : v1;
-    const nT = Math.atan2(v0.y, v0.x);
-    const nC = Math.atan2(-vc.y, -vc.x);
-
-    // The hand is timed by distance along its loop, so its speed profile is
-    // its real speed. arc[i] is the length from the catch point, going
-    // clockwise, to angle thC - TAU*i/N.
-    const N = 2048, arc = new Float64Array(N + 1);
-    for (let i = 1; i <= N; i++) {
-      const p = geom.P(thC - TAU * (i - 1) / N, 1), q = geom.P(thC - TAU * i / N, 1);
+    // Hands are timed by distance along their loop, so a speed profile is a
+    // real speed. arc[i] is the length going clockwise from angle 0 to angle
+    // -TAU*i/N, over two turns so a stretch never has to wrap.
+    const N = 2048, arc = new Float64Array(2 * N + 1);
+    for (let i = 1; i <= 2 * N; i++) {
+      const p = geom.P(-TAU * (i - 1) / N, 1), q = geom.P(-TAU * i / N, 1);
       arc[i] = arc[i - 1] + Math.hypot(q.x - p.x, q.y - p.y);
     }
-    const arcAt = (phi) => {
-      const f = phi / TAU * N, i = Math.min(N - 1, Math.floor(f));
+    const lenAt = (phi) => {
+      const f = phi / TAU * N, i = Math.min(2 * N - 1, Math.floor(f));
       return arc[i] + (arc[i + 1] - arc[i]) * (f - i);
     };
-    const A1 = mod(thC - thT, TAU);           // clockwise angle, catch -> throw (holding)
-    const L1 = arcAt(A1);                     // ... and its length
-    const L2 = arc[N] - L1;                   // throw -> catch (empty)
-    const Td = D * B, Te = (2 - D) * B;
-    // Hand speeds at the two ends of the carry. A throw has to match the
-    // ball: it leaves at the hand's speed. A catch needn't: the hand meets
-    // the ball at CATCH_GIVE of its speed and the rest goes in the impact.
-    // Matching fully used to force the hand to all but stop on a short
-    // return swing; the reach on the loop's outside now gives it room. In
-    // the reverse pattern the standard throw point is where catches happen,
-    // so the give swaps ends.
-    const sT = Math.hypot(v0.x, v0.y) * (opts.reverse ? CATCH_GIVE : 1);
-    const sC = Math.hypot(v1.x, v1.y) * (opts.reverse ? 1 : CATCH_GIVE);
-    const seg1 = makeSegment(Td, L1, sC, sT);
-    const seg2 = makeSegment(Te, L2, sT, sC);
+
+    // Each hand works through a timeline of keyframes. At each of its beats
+    // it throws (a height of 3 or more), or holds its ball (a 2) or is empty
+    // (a 0), and then rests at the bottom of its loop. Before a beat, it
+    // catches whatever was thrown to land then. Between keyframes it moves
+    // clockwise round the loop with a smooth speed profile.
+    const landing = new Array(L).fill(0);   // height of the throw landing on each beat
+    pattern.forEach((k, i) => { if (k > 0) landing[(i + k) % L] = k; });
+    const P = L % 2 === 0 ? L : 2 * L;      // beats before both hands repeat
+    const hands = [1, -1].map((side) => {
+      const kf = [];
+      for (let b = side === 1 ? 0 : 1; b < P; b += 2) {
+        const k = pattern[b % L], kin = landing[b % L];
+        if (kin >= 3) {
+          const ty = types[kin];
+          kf.push({ t: (b - D) * B, th: ty.thC, v: ty.sC, nrm: ty.nC, hold: true });
+        }
+        if (k >= 3) {
+          const ty = types[k];
+          kf.push({ t: b * B, th: ty.thT, v: ty.sT, nrm: ty.nT, hold: false });
+        } else {
+          kf.push({ t: b * B, th: REST_TH, v: 0, nrm: Math.PI / 2, hold: k === 2 });
+        }
+      }
+      const period = P * B;
+      kf.forEach((f) => { f.t = mod(f.t, period); });
+      kf.sort((a, b) => a.t - b.t);
+      const segs = kf.map((a, i) => {
+        const z = kf[(i + 1) % kf.length];
+        const T = mod(z.t - a.t, period) || period;
+        const phi0 = mod(-a.th, TAU), dphi = mod(a.th - z.th, TAU);
+        const s0 = lenAt(phi0), len = lenAt(phi0 + dphi) - s0;
+        const wrap = (x) => mod(x + Math.PI, TAU) - Math.PI;
+        return {
+          t0: a.t, T, s0, len, hold: a.hold,
+          prof: makeSegment(T, len, a.v, z.v),
+          n0: a.nrm, dn: wrap(z.nrm - a.nrm),
+        };
+      });
+      return { segs, period };
+    });
 
     // Ball bookkeeping: simulate throws from beat 0, a ball thrown at beat b
-    // with height k lands at beat b+k. Ids are steady after the first cycle.
-    const L = pattern.length;
-    const M = L % 2 === 0 ? L : 2 * L;
-    const Q = M * n;                      // every ball's period divides Q
+    // with height k lands at beat b+k. Every ball's round trip is a multiple
+    // of Q beats, so ids are periodic in Q once the first balls are in.
+    let Q = 1;
+    for (let r = 0; r < P; r++) {
+      if (pattern[r % L] === 0) continue;
+      let c = r, T = 0, steps = 0;
+      do { T += pattern[c % L]; c = (c + pattern[c % L]) % P; } while (c !== r && ++steps < P);
+      Q = lcm(Q, T);
+    }
     const lands = new Map();
     const events = [];                    // events[b] = ball id thrown at beat b, or -1
     let nextId = 0;
@@ -278,49 +355,45 @@
     }
     const extent = { w: 2 * xMax, h: Math.max(apex, geom.b) - yMin, xMax, yMin };
 
-    return {
-      n, h, pattern, cross, geom, D, B, F, thT, thC, pT, pC, v0, v1, apex, err,
-      extent,
-      A1, L1, L2, arc, Td, Te, seg1, seg2, Q, events, L, nT, nC,
-    };
+    return { n, h, pattern, geom, D, B, types, apex, err, extent, arc, hands, Q, events, L };
   }
 
-  // hand angle at time tau since its last catch, tau in [0, 2B)
-  function handAngle(m, tau) {
-    const s = tau < m.Td ? m.seg1(tau) : m.L1 + m.seg2(tau - m.Td);
+  // the segment of a hand's timeline running at time t, and the time into it
+  function handSeg(m, t, side) {
+    const hand = m.hands[side === 1 ? 0 : 1];
+    const tp = mod(t, hand.period), segs = hand.segs;
+    let i = segs.length - 1;
+    while (i >= 0 && segs[i].t0 > tp) i--;
+    const seg = segs[i < 0 ? segs.length - 1 : i];   // before the first keyframe: the last, wrapping
+    return { seg, dt: mod(tp - seg.t0, hand.period) };
+  }
+
+  function handPos(m, t, side) {
+    const { seg, dt } = handSeg(m, t, side);
+    const s = seg.s0 + seg.prof(dt);
     // invert the arc-length table
-    const arc = m.arc, N = arc.length - 1;
-    let lo = 0, hi = N;
+    const arc = m.arc, N = (arc.length - 1) / 2;
+    let lo = 0, hi = arc.length - 1;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (arc[mid] <= s) lo = mid; else hi = mid; }
     const f = lo + Math.min(1, Math.max(0, (s - arc[lo]) / (arc[hi] - arc[lo] || 1)));
-    return m.thC - TAU * f / N;
+    return m.geom.P(-TAU * f / N, side);
   }
 
-  // right hand throws on even beats, left on odd
-  function handPos(m, t, side) {
-    const beats = t / m.B - (side === 1 ? 0 : 1) + m.D;
-    const tau = mod(beats, 2) * m.B;
-    return m.geom.P(handAngle(m, tau), side);
-  }
-
-  // Direction the paddle face points. At the throw it points along the
-  // launch velocity, at the catch it points back up the incoming velocity,
-  // so the ball always leaves and lands square on the face. In between it
-  // turns in step with the hand's progress round the ellipse.
+  // Direction the paddle face points. At a throw it points along the launch
+  // velocity, at a catch back up the incoming velocity, so the ball always
+  // leaves and lands square on the face; resting, straight up. In between it
+  // turns in step with the hand's progress along its loop.
   function handNormal(m, t, side) {
-    const beats = t / m.B - (side === 1 ? 0 : 1) + m.D;
-    const tau = mod(beats, 2) * m.B;
-    const wrap = (a) => mod(a + Math.PI, TAU) - Math.PI;
-    const ang = tau < m.Td
-      ? m.nC + wrap(m.nT - m.nC) * m.seg1(tau) / m.L1
-      : m.nT + wrap(m.nC - m.nT) * m.seg2(tau - m.Td) / m.L2;
+    const { seg, dt } = handSeg(m, t, side);
+    const f = seg.len > 1e-9 ? seg.prof(dt) / seg.len : dt / seg.T;
+    const ang = seg.n0 + seg.dn * f;
     return { x: side * Math.cos(ang), y: Math.sin(ang) };
   }
 
-  function flightPos(m, tau, side) {
+  function flightPos(ty, tau, side) {
     return {
-      x: side * (m.pT.x + m.v0.x * tau),
-      y: m.pT.y + m.v0.y * tau - 0.5 * G * tau * tau,
+      x: side * (ty.pT.x + ty.v0.x * tau),
+      y: ty.pT.y + ty.v0.y * tau - 0.5 * G * tau * tau,
     };
   }
 
@@ -337,15 +410,19 @@
       const tau = (tb - b) * m.B;
       const throwSide = b % 2 === 0 ? 1 : -1;
       const catchSide = (b + k) % 2 === 0 ? 1 : -1;
-      const pos = tau < m.F ? flightPos(m, tau, throwSide) : handPos(m, t, catchSide);
-      out.push({ id, ...pos, held: tau >= m.F });
+      // a 2 never leaves the hand
+      const ty = m.types[k];
+      const flying = ty && tau < ty.F;
+      const pos = flying ? flightPos(ty, tau, throwSide) : handPos(m, t, catchSide);
+      out.push({ id, ...pos, held: !flying });
     }
     return out;
   }
 
   // Throws and catches with display time s in (s0, s1]: { s, kind, id, side }.
   // Display time runs backwards through the model in the reverse pattern,
-  // which turns each throw into a catch and each catch into a throw.
+  // which turns each throw into a catch and each catch into a throw. Holds
+  // (2s) make no sound.
   function eventsBetween(m, s0, s1, reverse) {
     const t0 = reverse ? -s1 : s0, t1 = reverse ? -s0 : s1;
     const out = [];
@@ -358,7 +435,7 @@
     };
     for (let b = Math.floor(t0 / m.B) - m.h - 1; b <= Math.ceil(t1 / m.B) + 1; b++) {
       const k = m.pattern[mod(b, m.L)];
-      if (k === 0) continue;
+      if (k < 3) continue;
       const id = m.events[mod(b, m.Q) + 2 * m.Q];
       add(b * m.B, 'throw', id, mod(b, 2) === 0 ? 1 : -1);
       add((b + k - m.D) * m.B, 'catch', id, mod(b + k, 2) === 0 ? 1 : -1);
@@ -367,7 +444,7 @@
   }
 
   if (typeof window === 'undefined') {
-    module.exports = { buildModel, ballsAt, handPos, handNormal, eventsBetween, G };
+    module.exports = { buildModel, parseSiteswap, patternFor, ballsAt, handPos, handNormal, eventsBetween, G };
     return;
   }
 
@@ -377,7 +454,7 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { n: 3, reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
+  const opts = { n: 3, pattern: patternFor(3), reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -393,6 +470,7 @@
       depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate };
     for (const [id, v] of Object.entries(values)) $(id).value = v;
     for (const id of ['guides', 'trails', 'sound']) $(id).checked = opts[id];
+    $('siteswap').value = opts.pattern.join('');
   }
 
   function rebuild() {
@@ -400,7 +478,7 @@
     // keep the two hand loops from overlapping in the middle
     const width = Math.min(opts.width, opts.spacing - 0.02);
     model = buildModel({ ...opts, width });
-    $('count').textContent = opts.n;
+    $('count').textContent = model.n;
     $('style').textContent = opts.reverse ? 'outside' : 'inside';
     $('dwellVal').textContent = Math.round(opts.dwell / 2 * 100) + '%';
     $('beatVal').textContent = opts.beat.toFixed(2) + 's';
@@ -410,17 +488,38 @@
     $('widthVal').textContent = cm(width);
     $('depthVal').textContent = cm(opts.depth);
     $('riseVal').textContent = cm(opts.reach);
-    const kind = model.cross ? 'cascade' : 'fountain';
-    const name = model.cross ? (opts.reverse ? 'reverse ' : '') + kind : kind + (opts.reverse ? ' (reverse)' : '');
+    const ss = opts.pattern.join('');
+    const uniform = opts.pattern.every((k) => k === opts.pattern[0]) || ss === '300' || ss === '330';
+    const kind = Object.values(model.types).every((ty) => ty.cross) ? 'cascade' : 'fountain';
+    const name = uniform ? (opts.reverse ? 'reverse ' : '') + kind : 'siteswap' + (opts.reverse ? ' (reverse)' : '');
+    const peaks = Object.values(model.types).map((ty) => ty.apex * 100);
+    const lo = Math.round(Math.min(...peaks)), hi = Math.round(Math.max(...peaks));
     $('stats').textContent =
-      `${name}  ${model.pattern.join('')}\n` +
-      `flight ${model.F.toFixed(2)}s  peak ${(model.apex * 100).toFixed(0)}cm
-` +
+      `${name}  ${ss}\n` +
+      `peak ${lo === hi ? hi : lo + '–' + hi}cm\n` +
       `shape ${cm(model.extent.w)} wide × ${cm(model.extent.h)} tall`;
   }
 
-  $('fewer').onclick = () => { opts.n = Math.max(1, opts.n - 1); rebuild(); };
-  $('more').onclick = () => { opts.n = Math.min(9, opts.n + 1); rebuild(); };
+  function setBalls(n) {
+    opts.n = n;
+    opts.pattern = patternFor(n);
+    $('siteswap').value = opts.pattern.join('');
+    $('siteswap').classList.remove('bad');
+    rebuild();
+  }
+  function setSiteswap() {
+    const box = $('siteswap'), r = parseSiteswap(box.value);
+    box.classList.toggle('bad', !!r.error);
+    box.title = r.error || '';
+    if (r.error) return;
+    opts.pattern = r.pattern;
+    opts.n = r.n;
+    rebuild();
+  }
+  $('fewer').onclick = () => setBalls(Math.max(1, model.n - 1));
+  $('more').onclick = () => setBalls(Math.min(9, model.n + 1));
+  $('siteswap').onchange = setSiteswap;
+  $('siteswap').onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
   $('style').onclick = () => { opts.reverse = !opts.reverse; rebuild(); };
   $('dwell').oninput = (e) => { opts.dwell = +e.target.value; rebuild(); };
   $('spacing').oninput = (e) => { opts.spacing = +e.target.value; rebuild(); };
@@ -433,9 +532,9 @@
   $('trails').onchange = (e) => { opts.trails = e.target.checked; };
   $('sound').onchange = (e) => { opts.sound = e.target.checked; if (opts.sound) unlockAudio(); };
   addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' && e.target.type === 'range') return;
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') return;
     if (e.key === ' ') { paused = !paused; e.preventDefault(); }
-    else if (e.key >= '1' && e.key <= '9') { opts.n = +e.key; rebuild(); }
+    else if (e.key >= '1' && e.key <= '9') setBalls(+e.key);
     else if (e.key === 'ArrowRight') { paused = true; simT += 1 / 60; }
     else if (e.key === 'ArrowLeft') { paused = true; simT -= 1 / 60; }
   });
@@ -498,31 +597,37 @@
     }
     ctx.setLineDash([]);
 
-    // ball path: dwell arcs + flight parabolas
+    // ball path: each hand's carries (sampled from its own timeline, so holds
+    // show too) and every kind of flight from either hand
     ctx.strokeStyle = color('--path');
     ctx.beginPath();
     for (const side of [1, -1]) {
-      const steps = 80;
-      for (let i = 0; i <= steps; i++) {
-        const p = g.P(m.thC - m.A1 * i / steps, side);
-        i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+      for (const seg of m.hands[side === 1 ? 0 : 1].segs) {
+        if (!seg.hold || seg.len < 1e-6) continue;
+        for (let i = 0; i <= 40; i++) {
+          const p = handPos(m, seg.t0 + seg.T * i / 40, side);
+          i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+        }
       }
-      for (let i = 0; i <= steps; i++) {
-        const p = flightPos(m, m.F * i / steps, side);
-        i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+      for (const ty of Object.values(m.types)) {
+        for (let i = 0; i <= 80; i++) {
+          const p = flightPos(ty, ty.F * i / 80, side);
+          i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+        }
       }
     }
     ctx.stroke();
 
     // tangency points: filled = throw, hollow = catch
     const r = 3 * dpr;
+    ctx.fillStyle = color('--path');
     for (const side of [1, -1]) {
-      const pThrow = g.P(opts.reverse ? m.thC : m.thT, side);
-      const pCatch = g.P(opts.reverse ? m.thT : m.thC, side);
-      ctx.fillStyle = color('--path');
-      ctx.beginPath(); ctx.arc(sx(pThrow.x), sy(pThrow.y), r, 0, TAU); ctx.fill();
-      ctx.strokeStyle = color('--path');
-      ctx.beginPath(); ctx.arc(sx(pCatch.x), sy(pCatch.y), r, 0, TAU); ctx.stroke();
+      for (const ty of Object.values(m.types)) {
+        const pThrow = g.P(opts.reverse ? ty.thC : ty.thT, side);
+        const pCatch = g.P(opts.reverse ? ty.thT : ty.thC, side);
+        ctx.beginPath(); ctx.arc(sx(pThrow.x), sy(pThrow.y), r, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(sx(pCatch.x), sy(pCatch.y), r, 0, TAU); ctx.stroke();
+      }
     }
   }
 
