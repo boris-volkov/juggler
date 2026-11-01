@@ -386,6 +386,15 @@
   const color = (name) => css.getPropertyValue(name).trim();
   const palette = ['#e4572e', '#2e86ab', '#f3a712', '#4caf50', '#a23b72', '#29335c', '#ff7f50', '#17bebb', '#8e6c8a'];
 
+  // Browsers restore form controls on a reload but the script starts from
+  // its defaults, so set the controls from the defaults to keep them agreeing.
+  function syncControls() {
+    const values = { dwell: opts.dwell, spacing: opts.spacing, width: opts.width,
+      depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate };
+    for (const [id, v] of Object.entries(values)) $(id).value = v;
+    for (const id of ['guides', 'trails', 'sound']) $(id).checked = opts[id];
+  }
+
   function rebuild() {
     opts.dwell = Math.min(opts.dwell, 1.9);
     // keep the two hand loops from overlapping in the middle
@@ -444,10 +453,19 @@
     const xMax = model.extent.xMax + BALL_R + 0.06;
     const yMin = model.extent.yMin - BALL_R - 0.06;
     const yMax = Math.max(model.apex, g.b) + BALL_R + 0.05;
-    const w = canvas.width, h = canvas.height;
-    const pad = 0.08;
-    const s = Math.min(w * (1 - 2 * pad) / (2 * xMax), h * (1 - 2 * pad) / (yMax - yMin));
-    return { s, cy: (yMax + yMin) / 2 };
+    // Fit the pattern clear of the control panel: in the space to its right
+    // or the space below it, whichever lets the pattern be drawn larger
+    // (beside it on a wide screen, under it on a phone held upright).
+    const dpr = devicePixelRatio || 1;
+    const r = $('panel').getBoundingClientRect();
+    const gap = 16 * dpr, pad = 0.08;
+    const fit = (x0, y0) => {
+      const w = canvas.width - x0, h = canvas.height - y0;
+      const s = Math.min(w * (1 - 2 * pad) / (2 * xMax), h * (1 - 2 * pad) / (yMax - yMin));
+      return { s, cx: x0 + w / 2, cy: (yMax + yMin) / 2, oy: y0 / 2 };
+    };
+    const beside = fit(r.right * dpr + gap, 0), below = fit(0, r.bottom * dpr + gap);
+    return beside.s >= below.s ? beside : below;
   }
 
   function updateView(dt) {
@@ -455,11 +473,13 @@
     if (!view) { view = t; return; }
     const k = 1 - Math.exp(-dt * 4);
     view.s += (t.s - view.s) * k;
+    view.cx += (t.cx - view.cx) * k;
     view.cy += (t.cy - view.cy) * k;
+    view.oy += (t.oy - view.oy) * k;
   }
 
-  const sx = (x) => canvas.width / 2 + x * view.s;
-  const sy = (y) => canvas.height / 2 - (y - view.cy) * view.s;
+  const sx = (x) => view.cx + x * view.s;
+  const sy = (y) => canvas.height / 2 + view.oy - (y - view.cy) * view.s;
 
   function drawGuides() {
     const m = model, g = m.geom, dpr = devicePixelRatio || 1;
@@ -663,6 +683,7 @@
     requestAnimationFrame(frame);
   }
 
+  syncControls();
   rebuild();
   requestAnimationFrame(frame);
 })();
