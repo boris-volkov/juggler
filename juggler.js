@@ -1048,8 +1048,11 @@
     // Light adds up, so a joint between runs would show as a seam. Instead
     // each pass is a stack of unbroken strokes, every one from some point to
     // the head: the newer the stretch, the more of them light it, which
-    // fades the tail with no joints along the trail.
+    // fades the tail with no joints along the trail. Each stroke is whole, so
+    // round caps don't overlap themselves, and the head, where every stroke
+    // ends, comes out rounded like the ball's glow instead of cut square.
     ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
     const LAYERS = 40;
     const passes = [[2.4 * w, 0.12], [w, 0.75], [0.3 * w, 0.6, '#fff']];   // width, alpha at the head, tint
     for (const [id, all] of trails) {
