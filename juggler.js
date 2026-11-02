@@ -509,6 +509,7 @@
     const hands = [1, -1].map((side, hi) => {
       const kf = [], throws = new Set(), catches = new Set();
       const flights = new Map(), dots = new Map();   // for the guides
+      const busy = table.some((row) => row[hi] && row[hi].k > 0);   // this hand juggles at all
       for (let b = 0; b < Ph; b++) {
         const e = table[b % P][hi];
         if (!e) continue;
@@ -533,6 +534,10 @@
             dots.set(`t${x}`, { x, y: yT, kind: 'throw' });
           } else kf.push({ t: b * B, th: ty.thT, v: ty.sT, nrm: ty.nT, hold: false });
         } else if (columns) {
+          // An empty hand that has juggling to get back to goes straight on
+          // from its last throw to its next catch, rather than dropping to a
+          // rest on the way and coming back up.
+          if (e.k === 0 && busy) continue;
           const x = e.k === 2 ? colAt(idAt(b, hi), hi) : restX[hi];
           kf.push({ t: b * B, p: { x, y: yT - geom.b }, d: null, v: 0, nrm: Math.PI / 2, hold: e.k === 2 });
         } else {
