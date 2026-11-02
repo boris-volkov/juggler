@@ -1,21 +1,16 @@
+/* Retro beige: warm paper, brown ink, and controls drawn like old hardware,
+   with hard edges and offset shadows instead of blur and rounding. */
 :root {
-  --bg: #f6f4ef;
-  --ink: #1d1d1f;
-  --muted: #8a877f;
-  --guide: rgba(29, 29, 31, 0.16);
-  --path: rgba(29, 29, 31, 0.32);
-  --panel: rgba(246, 244, 239, 0.85);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121214;
-    --ink: #ecebe6;
-    --muted: #7d7b75;
-    --guide: rgba(236, 235, 230, 0.14);
-    --path: rgba(236, 235, 230, 0.3);
-    --panel: rgba(18, 18, 20, 0.85);
-  }
+  color-scheme: light;
+  --bg: #e9dcc3;
+  --ink: #3a2e24;
+  --muted: #86715b;
+  --guide: rgba(58, 46, 36, 0.2);
+  --path: rgba(58, 46, 36, 0.38);
+  --panel: #f1e7d3;
+  --face: #f6eedd;      /* raised surfaces: buttons, knobs, fields */
+  --groove: #cdbb9b;    /* sunken surfaces: slider tracks */
+  --accent: #c4552f;
 }
 
 * { box-sizing: border-box; }
@@ -25,7 +20,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 13px/1.4 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
   overflow: hidden;
 }
 
@@ -39,11 +34,33 @@ canvas {
   position: fixed;
   top: 16px;
   left: 16px;
-  padding: 12px 14px;
+  padding: 0 14px 12px;
   background: var(--panel);
-  border-radius: 8px;
-  backdrop-filter: blur(6px);
+  border: 2px solid var(--ink);
+  border-radius: 3px;
+  box-shadow: 4px 4px 0 var(--ink);
   user-select: none;
+}
+
+/* a striped title bar, like an old desktop window */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -14px 8px;
+  padding: 3px 10px;
+  border-bottom: 2px solid var(--ink);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+.titlebar::before,
+.titlebar::after {
+  content: "";
+  flex: 1;
+  height: 9px;
+  background: repeating-linear-gradient(var(--ink) 0 1px, transparent 1px 3px);
 }
 
 .row {
@@ -54,57 +71,136 @@ canvas {
 }
 
 .label {
-  width: 52px;
+  width: 60px;
   color: var(--muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
 }
 
 .val {
   width: 44px;
   text-align: right;
-  color: var(--muted);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 #count {
   width: 20px;
   text-align: center;
+  font-weight: 600;
 }
 
-button {
-  font: inherit;
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--guide);
-  border-radius: 4px;
-  width: 26px;
-  height: 22px;
-  cursor: pointer;
-}
-button.wide { width: auto; padding: 0 10px; }
-button:hover { border-color: var(--path); }
-
-input[type="range"] { width: 120px; accent-color: var(--ink); }
+/* raised, with a hard shadow that it presses down into */
+button,
 select,
 input[type="text"] {
   font: inherit;
   color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--guide);
-  border-radius: 4px;
-  width: 120px;
+  background: var(--face);
+  border: 1.5px solid var(--ink);
+  border-radius: 2px;
   height: 22px;
-  padding: 0 6px;
+  box-shadow: 2px 2px 0 var(--ink);
 }
-select:focus,
-input[type="text"]:focus { outline: none; border-color: var(--path); }
-input[type="text"].bad { border-color: #e4572e; }
-select { width: 172px; padding: 0 2px; cursor: pointer; }
-select option { background: var(--bg); color: var(--ink); }
+button {
+  width: 26px;
+  padding: 0;
+  cursor: pointer;
+}
+button.wide { width: auto; padding: 0 10px; }
+button:hover, select:hover { background: #fffaf0; }
+button:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
+select {
+  width: 172px;
+  padding: 0 22px 0 6px;
+  cursor: pointer;
+  appearance: none;
+  /* a small solid arrow, drawn rather than the system's */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink) 50%),
+    linear-gradient(-45deg, transparent 50%, var(--ink) 50%);
+  background-position: right 11px center, right 6px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+select option { background: var(--face); color: var(--ink); }
+input[type="text"] { width: 120px; padding: 0 6px; }
+select:focus-visible,
+input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+input[type="text"].bad { border-color: var(--accent); color: var(--accent); }
 .row[hidden] { display: none; }
-.err { color: #e4572e; font-size: 11px; white-space: nowrap; }
-input[type="checkbox"] { accent-color: var(--ink); }
+.err { color: var(--accent); font-size: 11px; white-space: nowrap; }
+
+/* sliders: a sunken groove and a fader knob with a centre line */
+input[type="range"] {
+  appearance: none;
+  width: 120px;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  background: var(--groove);
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  box-shadow: inset 1px 1px 0 rgba(58, 46, 36, 0.35);
+}
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  background: var(--groove);
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  box-shadow: inset 1px 1px 0 rgba(58, 46, 36, 0.35);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 18px;
+  margin-top: -7.5px;
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent 4px, var(--ink) 4px 5px, transparent 5px), var(--face);
+  box-shadow: 1.5px 1.5px 0 var(--ink);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 18px;
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent 3px, var(--ink) 3px 4px, transparent 4px), var(--face);
+  box-shadow: 1.5px 1.5px 0 var(--ink);
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* checkboxes: a square that fills in */
+input[type="checkbox"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  background: var(--face);
+  box-shadow: 1.5px 1.5px 0 var(--ink);
+  cursor: pointer;
+}
+input[type="checkbox"]:checked {
+  background: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--face), 1.5px 1.5px 0 var(--ink);
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 #stats {
-  margin-top: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1.5px dashed var(--guide);
   color: var(--muted);
   white-space: pre;
 }

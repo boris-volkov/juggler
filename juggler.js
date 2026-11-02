@@ -713,7 +713,8 @@
 
   const css = getComputedStyle(document.documentElement);
   const color = (name) => css.getPropertyValue(name).trim();
-  const palette = ['#e4572e', '#2e86ab', '#f3a712', '#4caf50', '#a23b72', '#29335c', '#ff7f50', '#17bebb', '#8e6c8a'];
+  // seventies enamel: burnt orange, teal, mustard, olive, plum, navy, rust, sea green, sienna
+  const palette = ['#c4552f', '#2f7275', '#d9a12b', '#6e8b3d', '#8c3b5a', '#34477a', '#de7a3e', '#4f9a8c', '#9a5a32'];
 
   // Browsers restore form controls on a reload but the script starts from
   // its defaults, so set the controls from the defaults to keep them agreeing.
