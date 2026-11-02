@@ -200,6 +200,33 @@
     };
   }
 
+  // A hand's path between two keyframes when throwing in columns: from p0 to
+  // p1, leaving and arriving vertically. h > 0 arches over (up, across, down:
+  // the empty hand after a throw), h < 0 dips under (down, across, up: the
+  // carry). w swings the middle sideways, so a path that starts and ends in
+  // the same column turns round instead of stopping dead and reversing.
+  // Returned as a function of distance along it, for arc-length timing.
+  function makeArch(p0, p1, h, w) {
+    const at = (f) => {
+      const c = (1 - Math.cos(f)) / 2, s = Math.sin(f);
+      return { x: p0.x + (p1.x - p0.x) * c + w * s * s, y: p0.y + (p1.y - p0.y) * c + h * s };
+    };
+    const N = 256, pts = [at(0)], acc = new Float64Array(N + 1);
+    for (let i = 1; i <= N; i++) {
+      pts.push(at(Math.PI * i / N));
+      acc[i] = acc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    return {
+      len: acc[N],
+      at(s) {
+        let lo = 0, hi = N;
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (acc[mid] <= s) lo = mid; else hi = mid; }
+        const f = Math.min(1, Math.max(0, (s - acc[lo]) / (acc[hi] - acc[lo] || 1)));
+        return { x: pts[lo].x + (pts[hi].x - pts[lo].x) * f, y: pts[lo].y + (pts[hi].y - pts[lo].y) * f };
+      },
+    };
+  }
+
   // ---------- model ----------
 
   const gcd = (a, b) => (b ? gcd(b, a % b) : a);
@@ -225,27 +252,44 @@
     // time, so "no dwell" means the shortest carry: a quick hairpin.
     // A 1 flies for a beat less the dwell, so a long dwell leaves it no time.
     const D = Math.max(MIN_DWELL, opts.pattern.includes(1) ? Math.min(opts.dwell, ONE_DWELL) : opts.dwell);
+    // A straight-up throw comes down where it went up, so only patterns of
+    // even throws (each ball back to its thrower) can be juggled in columns.
+    // Columns look the same run backwards, so they have no reverse.
+    const columns = !!opts.columns && opts.pattern.every((k) => k % 2 === 0);
+    const reverse = !!opts.reverse && !columns;
     // Throwing outside is shown as the model run backwards in time. Run
     // backwards, a throw from beat b landing at b + k becomes a throw of the
     // same height from beat -(b + k), so build that pattern then.
     const L = opts.pattern.length;
     let pattern = opts.pattern;
-    if (opts.reverse) {
+    if (reverse) {
       pattern = new Array(L).fill(0);
       opts.pattern.forEach((k, i) => { if (k > 0) pattern[mod(-(i + k), L)] = k; });
     }
     const n = pattern.reduce((a, b) => a + b, 0) / L;
     const h = Math.max(...pattern);
     const geom = makeGeom(opts.spacing / 2, opts.width / 2, opts.depth / 2, BULGE, opts.reach);
+    // in columns: the height of every throw, and of every catch (raised by the reach)
+    const yT = 0, yC = opts.reach;
 
-    // One tangent flight for each throw height except 0 and 2 (no throw):
-    // odd heights cross to the other hand, even ones come back to the
-    // thrower. Solved for the right hand; the left is its mirror image.
+    // One flight for each throw height except 0 and 2 (no throw). On loops:
+    // tangent to them, odd heights crossing to the other hand and even ones
+    // coming back to the thrower, solved for the right hand (the left is its
+    // mirror image). In columns: straight up and down, placed per ball below.
     const types = {};
     let err = 0, apex = -Infinity;
     for (const k of new Set(pattern)) {
       if (k === 0 || k === 2) continue;
       const cross = k % 2 === 1, F = (k - D) * B;
+      if (columns) {
+        const vy = (yC - yT) / F + G * F / 2;
+        const v0 = { x: 0, y: vy }, v1 = { x: 0, y: vy - G * F };
+        const top = yT + vy * vy / (2 * G);
+        // the paddle stays flat: the ball leaves and lands square on it
+        types[k] = { k, cross, F, pT: { x: 0, y: yT }, v0, v1, apex: top, sT: vy, sC: -v1.y };
+        apex = Math.max(apex, top);
+        continue;
+      }
       const sol = solveThrow(geom, cross, F, k);
       const pT = geom.P(sol.thT, 1);
       const pC = geom.P(sol.thC, cross ? -1 : 1);
@@ -265,8 +309,8 @@
         // ball at CATCH_GIVE of its speed and the rest goes in the impact.
         // In the reverse pattern the standard throw point is where catches
         // happen, so the give swaps ends.
-        sT: Math.hypot(v0.x, v0.y) * (opts.reverse ? CATCH_GIVE : 1),
-        sC: Math.hypot(v1.x, v1.y) * (opts.reverse ? 1 : CATCH_GIVE),
+        sT: Math.hypot(v0.x, v0.y) * (reverse ? CATCH_GIVE : 1),
+        sC: Math.hypot(v1.x, v1.y) * (reverse ? 1 : CATCH_GIVE),
       };
       err = Math.max(err, sol.err);
       apex = Math.max(apex, top);
@@ -285,52 +329,10 @@
       return arc[i] + (arc[i + 1] - arc[i]) * (f - i);
     };
 
-    // Each hand works through a timeline of keyframes. At each of its beats
-    // it throws, or holds its ball (a 2) or is empty (a 0), and then rests at
-    // the bottom of its loop. Before a beat, it
-    // catches whatever was thrown to land then. Between keyframes it moves
-    // clockwise round the loop with a smooth speed profile.
-    const landing = new Array(L).fill(0);   // height of the throw landing on each beat
-    pattern.forEach((k, i) => { if (k > 0) landing[(i + k) % L] = k; });
-    const P = L % 2 === 0 ? L : 2 * L;      // beats before both hands repeat
-    const hands = [1, -1].map((side) => {
-      const kf = [], throws = new Set(), catches = new Set();
-      for (let b = side === 1 ? 0 : 1; b < P; b += 2) {
-        const k = pattern[b % L], kin = landing[b % L];
-        if (types[k]) throws.add(k);
-        if (types[kin]) catches.add(kin);
-        if (types[kin]) {
-          const ty = types[kin];
-          kf.push({ t: (b - D) * B, th: ty.thC, v: ty.sC, nrm: ty.nC, hold: true });
-        }
-        if (types[k]) {
-          const ty = types[k];
-          kf.push({ t: b * B, th: ty.thT, v: ty.sT, nrm: ty.nT, hold: false });
-        } else {
-          kf.push({ t: b * B, th: REST_TH, v: 0, nrm: Math.PI / 2, hold: k === 2 });
-        }
-      }
-      const period = P * B;
-      kf.forEach((f) => { f.t = mod(f.t, period); });
-      kf.sort((a, b) => a.t - b.t);
-      const segs = kf.map((a, i) => {
-        const z = kf[(i + 1) % kf.length];
-        const T = mod(z.t - a.t, period) || period;
-        const phi0 = mod(-a.th, TAU), dphi = mod(a.th - z.th, TAU);
-        const s0 = lenAt(phi0), len = lenAt(phi0 + dphi) - s0;
-        const wrap = (x) => mod(x + Math.PI, TAU) - Math.PI;
-        return {
-          t0: a.t, T, s0, len, hold: a.hold,
-          prof: makeSegment(T, len, a.v, z.v),
-          n0: a.nrm, dn: wrap(z.nrm - a.nrm),
-        };
-      });
-      return { segs, period, throws, catches };
-    });
-
     // Ball bookkeeping: simulate throws from beat 0, a ball thrown at beat b
     // with height k lands at beat b+k. Every ball's round trip is a multiple
     // of Q beats, so ids are periodic in Q once the first balls are in.
+    const P = L % 2 === 0 ? L : 2 * L;      // beats before both hands repeat
     let Q = 1;
     for (let r = 0; r < P; r++) {
       if (pattern[r % L] === 0) continue;
@@ -350,16 +352,135 @@
         events[b] = id;
       } else events[b] = -1;
     }
+    const idAt = (b) => events[mod(b, Q) + 2 * Q];
 
-    // overall size of the ball path: hand loops at the bottom, peak on top
+    // Columns: every ball keeps to a column of its own. A hand's balls take
+    // its columns inner to outer, in the order it first throws them. With
+    // balls in both hands the columns are spaced evenly across the whole
+    // pattern; a hand juggling alone spreads them over its own loop's width.
+    // An idle hand waits under the middle of its columns.
+    let colX = null;
+    const restX = [geom.X, -geom.X];
+    if (columns) {
+      colX = {};
+      const own = [[], []];
+      for (let b = 2 * Q; b < 3 * Q; b++) {
+        const id = events[b];
+        if (id >= 0 && !own[b % 2].includes(id)) own[b % 2].push(id);
+      }
+      const nR = own[0].length, nL = own[1].length;
+      const S = geom.X + geom.a - geom.a / Math.max(nR, nL);   // outermost column
+      own.forEach((ids, hi) => {
+        const side = hi === 0 ? 1 : -1;
+        ids.forEach((id, j) => {
+          colX[id] = nR && nL
+            ? -S + 2 * S * (side === 1 ? nL + j : nL - 1 - j) / (nR + nL - 1)
+            : side * (geom.X - geom.a + 2 * geom.a * (j + 0.5) / ids.length);
+        });
+        if (ids.length) restX[hi] = ids.reduce((s, id) => s + colX[id], 0) / ids.length;
+      });
+    }
+
+    // Each hand works through a timeline of keyframes. At each of its beats
+    // it throws, or holds its ball (a 2) or is empty (a 0), and then rests at
+    // the bottom of its loop. Before a beat, it catches whatever was thrown
+    // to land then. Between keyframes it moves clockwise round the loop with
+    // a smooth speed profile; in columns, along an arch or a dip from one
+    // keyframe to the next. Columns can take longer to repeat than the
+    // pattern, since the balls take turns in them.
+    const landing = new Array(L).fill(0);   // height of the throw landing on each beat
+    pattern.forEach((k, i) => { if (k > 0) landing[(i + k) % L] = k; });
+    const Ph = columns ? lcm(P, Q) : P;
+    const hands = [1, -1].map((side, hi) => {
+      const kf = [], throws = new Set(), catches = new Set();
+      const flights = new Map(), dots = new Map();   // for the guides
+      for (let b = side === 1 ? 0 : 1; b < Ph; b += 2) {
+        const k = pattern[b % L], kin = landing[b % L];
+        if (types[k]) throws.add(k);
+        if (types[kin]) catches.add(kin);
+        if (types[kin]) {
+          const ty = types[kin];
+          if (columns) {
+            const x = colX[idAt(b - kin)];
+            kf.push({ t: (b - D) * B, p: { x, y: yC }, dir: -1, v: ty.sC, hold: true });
+            dots.set(`c${x}`, { x, y: yC, kind: 'catch' });
+          } else kf.push({ t: (b - D) * B, th: ty.thC, v: ty.sC, nrm: ty.nC, hold: true });
+        }
+        if (types[k]) {
+          const ty = types[k];
+          if (columns) {
+            const x = colX[idAt(b)];
+            kf.push({ t: b * B, p: { x, y: yT }, dir: 1, v: ty.sT, hold: false });
+            flights.set(`${k}@${x}`, { ty, x });
+            dots.set(`t${x}`, { x, y: yT, kind: 'throw' });
+          } else kf.push({ t: b * B, th: ty.thT, v: ty.sT, nrm: ty.nT, hold: false });
+        } else if (columns) {
+          const x = k === 2 ? colX[idAt(b)] : restX[hi];
+          kf.push({ t: b * B, p: { x, y: yT - geom.b }, dir: 0, v: 0, hold: k === 2 });
+        } else {
+          kf.push({ t: b * B, th: REST_TH, v: 0, nrm: Math.PI / 2, hold: k === 2 });
+        }
+      }
+      if (!columns) {
+        for (const k of throws) {
+          flights.set(k, { ty: types[k] });
+          dots.set(`t${k}`, { ...geom.P(types[k].thT, side), kind: 'throw' });
+        }
+        for (const k of catches) dots.set(`c${k}`, { ...geom.P(types[k].thC, side), kind: 'catch' });
+      }
+      const period = Ph * B;
+      kf.forEach((f) => { f.t = mod(f.t, period); });
+      kf.sort((a, b) => a.t - b.t);
+      const segs = kf.map((a, i) => {
+        const z = kf[(i + 1) % kf.length];
+        const T = mod(z.t - a.t, period) || period;
+        if (columns) {
+          // Arch over after a throw or into a catch, dip under to carry; as
+          // high (or low) as the loop's half-depth past the higher (lower)
+          // end. A path back into its own column swings a quarter of the
+          // loop's half-width: outward under a carry, inward over the top.
+          const sg = a.dir || -z.dir, dy = Math.abs(z.p.y - a.p.y);
+          const lift = sg * Math.sqrt(geom.b * geom.b + dy * geom.b);
+          const swing = sg && Math.abs(z.p.x - a.p.x) < 1e-6 ? sg * -side * geom.a / 4 : 0;
+          const path = makeArch(a.p, z.p, lift, swing);
+          return {
+            t0: a.t, T, len: path.len, path, hold: a.hold,
+            prof: makeSegment(T, path.len, a.v, z.v),
+            n0: Math.PI / 2, dn: 0,
+          };
+        }
+        const phi0 = mod(-a.th, TAU), dphi = mod(a.th - z.th, TAU);
+        const s0 = lenAt(phi0), len = lenAt(phi0 + dphi) - s0;
+        const wrap = (x) => mod(x + Math.PI, TAU) - Math.PI;
+        return {
+          t0: a.t, T, s0, len, hold: a.hold,
+          prof: makeSegment(T, len, a.v, z.v),
+          n0: a.nrm, dn: wrap(z.nrm - a.nrm),
+        };
+      });
+      return { segs, period, throws, catches, flights: [...flights.values()], dots: [...dots.values()] };
+    });
+
+    // overall size of the ball path: hand paths at the bottom, peak on top
     let xMax = 0, yMin = 0;
-    for (let i = 0; i < 128; i++) {
-      const p = geom.P(TAU * i / 128, 1);
-      xMax = Math.max(xMax, p.x); yMin = Math.min(yMin, p.y);
+    if (columns) {
+      for (const hand of hands) {
+        for (const seg of hand.segs) {
+          for (let i = 0; i <= 32; i++) {
+            const p = seg.path.at(seg.len * i / 32);
+            xMax = Math.max(xMax, Math.abs(p.x)); yMin = Math.min(yMin, p.y);
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < 128; i++) {
+        const p = geom.P(TAU * i / 128, 1);
+        xMax = Math.max(xMax, p.x); yMin = Math.min(yMin, p.y);
+      }
     }
     const extent = { w: 2 * xMax, h: Math.max(apex, geom.b) - yMin, xMax, yMin };
 
-    return { n, h, pattern, geom, D, B, types, apex, err, extent, arc, hands, Q, events, L };
+    return { n, h, pattern, geom, D, B, types, apex, err, extent, arc, hands, Q, events, L, columns, reverse, colX };
   }
 
   // the segment of a hand's timeline running at time t, and the time into it
@@ -374,6 +495,7 @@
 
   function handPos(m, t, side) {
     const { seg, dt } = handSeg(m, t, side);
+    if (seg.path) return seg.path.at(seg.prof(dt));
     const s = seg.s0 + seg.prof(dt);
     // invert the arc-length table
     const arc = m.arc, N = (arc.length - 1) / 2;
@@ -418,6 +540,7 @@
       const ty = m.types[k];
       const flying = ty && tau < ty.F;
       const pos = flying ? flightPos(ty, tau, throwSide) : handPos(m, t, catchSide);
+      if (flying && m.colX) pos.x = m.colX[id];
       out.push({ id, ...pos, held: !flying });
     }
     return out;
@@ -458,7 +581,8 @@
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
-  const opts = { pattern: patternFor(3), reverse: false, dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
+  const STYLES = ['inside', 'outside', 'up'];   // throw style: the button cycles through them
+  const opts = { pattern: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -480,9 +604,9 @@
     opts.dwell = Math.min(opts.dwell, 1.9);
     // keep the two hand loops from overlapping in the middle
     const width = Math.min(opts.width, opts.spacing - 0.02);
-    model = buildModel({ ...opts, width });
+    model = buildModel({ ...opts, width, reverse: opts.style === 'outside', columns: opts.style === 'up' });
     $('count').textContent = model.n;
-    $('style').textContent = opts.reverse ? 'outside' : 'inside';
+    $('style').textContent = opts.style;
     $('dwellVal').textContent = Math.round(opts.dwell / 2 * 100) + '%';
     $('beatVal').textContent = opts.beat.toFixed(2) + 's';
     $('rateVal').textContent = opts.rate.toFixed(2) + '×';
@@ -494,44 +618,52 @@
     const ss = opts.pattern.join('');
     const uniform = opts.pattern.every((k) => k === opts.pattern[0]) || ss === '300' || ss === '330';
     const kind = Object.values(model.types).every((ty) => ty.cross) ? 'cascade' : 'fountain';
-    const name = uniform ? (opts.reverse ? 'reverse ' : '') + kind : 'siteswap' + (opts.reverse ? ' (reverse)' : '');
+    const name = model.columns ? 'columns'
+      : uniform ? (model.reverse ? 'reverse ' : '') + kind : 'siteswap' + (model.reverse ? ' (reverse)' : '');
     const peaks = Object.values(model.types).map((ty) => ty.apex * 100);
     const lo = Math.round(Math.min(...peaks)), hi = Math.round(Math.max(...peaks));
     const capped = opts.pattern.includes(1) && opts.dwell > ONE_DWELL;
+    const note = opts.style === 'up' && !model.columns ? '  (straight up needs all even throws)'
+      : capped ? `  (dwell held to ${ONE_DWELL * 50}% for 1s)` : '';
     $('stats').textContent =
-      `${name}  ${ss}${capped ? `  (dwell held to ${ONE_DWELL * 50}% for 1s)` : ''}\n` +
+      `${name}  ${ss}${note}\n` +
       `peak ${lo === hi ? hi : lo + '–' + hi}cm\n` +
       `shape ${cm(model.extent.w)} wide × ${cm(model.extent.h)} tall`;
   }
 
   // Patterns offered for each number of balls, the basic one first. The ball
   // count picks the list; the menu picks from it, or "custom" opens a box
-  // for any siteswap, which then sets the ball count to match.
+  // for any siteswap, which then sets the ball count to match. A preset can
+  // also set the throw style: the pillars and columns are thrown straight up.
   const PRESETS = {
     1: [['300', 'one ball']],
-    2: [['330', 'cascade'], ['31', 'shower'], ['40', 'one-hand fountain'], ['420', '420'], ['312', '312']],
-    3: [['3', 'cascade'], ['51', 'shower'], ['423', '423'], ['441', '441'], ['531', '531'], ['4413', '4413'],
-      ['42', 'two in one hand'], ['522', '522'], ['504', '504'], ['60', 'three in one hand']],
-    4: [['4', 'fountain'], ['71', 'shower'], ['53', 'half shower'], ['534', '534'], ['552', '552'], ['5551', '5551'],
-      ['633', '633'], ['642', '642'], ['7531', '7531']],
-    5: [['5', 'cascade'], ['91', 'shower'], ['64', '64'], ['645', '645'], ['663', '663'], ['744', '744'],
-      ['753', '753'], ['75751', '75751'], ['66661', '66661']],
-    6: [['6', 'fountain'], ['75', 'half shower'], ['855', '855']],
-    7: [['7', 'cascade'], ['86', '86']],
-    8: [['8', 'fountain'], ['97', 'half shower']],
+    2: [['330', 'cascade'], ['4400', 'columns', 'up'], ['31', 'shower'], ['40', 'one-hand fountain'],
+      ['40', 'one-hand columns', 'up'], ['420', '420'], ['312', '312']],
+    3: [['3', 'cascade'], ['4440', 'pillars', 'up'], ['51', 'shower'], ['423', '423'], ['441', '441'], ['531', '531'],
+      ['4413', '4413'], ['42', 'two in one hand'], ['522', '522'], ['504', '504'], ['60', 'three in one hand'],
+      ['60', 'one-hand columns', 'up']],
+    4: [['4', 'fountain'], ['4', 'pillars', 'up'], ['71', 'shower'], ['53', 'half shower'], ['534', '534'],
+      ['552', '552'], ['5551', '5551'], ['633', '633'], ['642', '642'], ['642', '642 in columns', 'up'], ['7531', '7531']],
+    5: [['5', 'cascade'], ['64', 'columns', 'up'], ['91', 'shower'], ['64', '64'], ['645', '645'], ['663', '663'],
+      ['744', '744'], ['753', '753'], ['75751', '75751'], ['66661', '66661']],
+    6: [['6', 'fountain'], ['6', 'pillars', 'up'], ['75', 'half shower'], ['855', '855']],
+    7: [['7', 'cascade'], ['86', '86'], ['86', 'columns', 'up']],
+    8: [['8', 'fountain'], ['8', 'pillars', 'up'], ['97', 'half shower']],
     9: [['9', 'cascade']],
   };
+  const presetKey = ([value, , style]) => (style ? `${value}:${style}` : value);
 
   function fillPatterns() {
-    const menu = $('pattern'), ss = opts.pattern.join('');
+    const menu = $('pattern');
+    const key = opts.pattern.join('') + (model.columns ? ':up' : '');
     const list = PRESETS[model.n] || [];
     menu.innerHTML = '';
-    for (const [value, label] of list) menu.add(new Option(label === value ? value : `${value}  ${label}`, value));
+    for (const p of list) menu.add(new Option(p[1] === p[0] ? p[0] : `${p[0]}  ${p[1]}`, presetKey(p)));
     menu.add(new Option('custom…', 'custom'));
-    const preset = list.some(([v]) => v === ss);
-    menu.value = preset ? ss : 'custom';
+    const preset = list.some((p) => presetKey(p) === key);
+    menu.value = preset ? key : 'custom';
     $('customRow').hidden = preset;
-    if (!preset) $('siteswap').value = ss;
+    if (!preset) $('siteswap').value = opts.pattern.join('');
   }
 
   function setPattern(pattern) {
@@ -539,12 +671,20 @@
     rebuild();
     fillPatterns();
   }
-  const setBalls = (n) => setPattern(parseSiteswap(PRESETS[n][0][0]).pattern);
+  // A preset with a style sets it; one without leaves the cascade styles
+  // alone but brings the throws down from straight up.
+  function choosePreset([value, , style]) {
+    if (style) opts.style = style;
+    else if (opts.style === 'up') opts.style = 'inside';
+    setPattern(parseSiteswap(value).pattern);
+  }
+  // a new ball count starts on its basic pattern, or its pillars when throwing straight up
+  const setBalls = (n) => choosePreset((opts.style === 'up' && PRESETS[n].find((p) => p[2] === 'up')) || PRESETS[n][0]);
 
   $('fewer').onclick = () => setBalls(Math.max(1, model.n - 1));
   $('more').onclick = () => setBalls(Math.min(9, model.n + 1));
   $('pattern').onchange = (e) => {
-    if (e.target.value !== 'custom') { setPattern(parseSiteswap(e.target.value).pattern); return; }
+    if (e.target.value !== 'custom') { choosePreset(PRESETS[model.n].find((p) => presetKey(p) === e.target.value)); return; }
     $('customRow').hidden = false;
     $('siteswap').value = opts.pattern.join('');
     $('siteswap').focus();
@@ -557,7 +697,11 @@
     if (!r.error) setPattern(r.pattern);
   };
   $('siteswap').onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
-  $('style').onclick = () => { opts.reverse = !opts.reverse; rebuild(); };
+  $('style').onclick = () => {
+    opts.style = STYLES[(STYLES.indexOf(opts.style) + 1) % STYLES.length];
+    rebuild();
+    fillPatterns();
+  };
   $('dwell').oninput = (e) => { opts.dwell = +e.target.value; rebuild(); };
   $('spacing').oninput = (e) => { opts.spacing = +e.target.value; rebuild(); };
   $('width').oninput = (e) => { opts.width = +e.target.value; rebuild(); };
@@ -621,14 +765,25 @@
     const m = model, g = m.geom, dpr = devicePixelRatio || 1;
     ctx.lineWidth = 1.2 * dpr;
 
-    // full hand ellipses, dashed
+    // full hand paths, dashed: the loops, or in columns the arches and dips
+    // the hand works through over one cycle
     ctx.strokeStyle = color('--guide');
     ctx.setLineDash([4 * dpr, 5 * dpr]);
     for (const side of [1, -1]) {
+      const hand = m.hands[side === 1 ? 0 : 1];
       ctx.beginPath();
-      for (let i = 0; i <= 160; i++) {
-        const p = g.P(TAU * i / 160, side);
-        i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+      if (m.columns) {
+        for (const seg of hand.segs) {
+          for (let i = 0; i <= 40; i++) {
+            const p = seg.path.at(seg.len * i / 40);
+            i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+          }
+        }
+      } else {
+        for (let i = 0; i <= 160; i++) {
+          const p = g.P(TAU * i / 160, side);
+          i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
+        }
       }
       ctx.stroke();
     }
@@ -646,31 +801,24 @@
           i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
         }
       }
-      for (const k of m.hands[side === 1 ? 0 : 1].throws) {
-        const ty = m.types[k];
+      for (const { ty, x } of m.hands[side === 1 ? 0 : 1].flights) {
         for (let i = 0; i <= 80; i++) {
           const p = flightPos(ty, ty.F * i / 80, side);
+          if (x !== undefined) p.x = x;
           i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y));
         }
       }
     }
     ctx.stroke();
 
-    // tangency points: filled = throw, hollow = catch
+    // throw and catch points: filled = throw, hollow = catch
+    // (run backwards, the model's throws are the catches and vice versa)
     const r = 3 * dpr;
     ctx.fillStyle = color('--path');
-    // (run backwards, the model's throws are the catches and vice versa)
-    for (const side of [1, -1]) {
-      const hand = m.hands[side === 1 ? 0 : 1];
-      for (const k of hand.throws) {
-        const p = g.P(m.types[k].thT, side);
-        ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), r, 0, TAU);
-        opts.reverse ? ctx.stroke() : ctx.fill();
-      }
-      for (const k of hand.catches) {
-        const p = g.P(m.types[k].thC, side);
-        ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), r, 0, TAU);
-        opts.reverse ? ctx.fill() : ctx.stroke();
+    for (const hand of m.hands) {
+      for (const d of hand.dots) {
+        ctx.beginPath(); ctx.arc(sx(d.x), sy(d.y), r, 0, TAU);
+        (d.kind === 'throw') !== m.reverse ? ctx.fill() : ctx.stroke();
       }
     }
   }
@@ -699,7 +847,7 @@
     const trails = new Map();
     for (let i = steps; i >= 0; i--) {
       const s = simT - span * i / steps;
-      for (const b of ballsAt(model, opts.reverse ? -s : s)) {
+      for (const b of ballsAt(model, model.reverse ? -s : s)) {
         if (!trails.has(b.id)) trails.set(b.id, []);
         trails.get(b.id).push(b);
       }
@@ -795,10 +943,10 @@
     // the swell covers most of the carry, in real seconds
     const rise = Math.min(SWELL_MAX, 0.8 * model.D * model.B / opts.rate);
     const ahead = rise * opts.rate;
-    for (const e of eventsBetween(model, s0, s1, opts.reverse)) {
+    for (const e of eventsBetween(model, s0, s1, model.reverse)) {
       if (e.kind === 'catch') ring(CATCH_NOTE, 0.16, 0.3, 0.5 * e.side);
     }
-    for (const e of eventsBetween(model, s0 + ahead, s1 + ahead, opts.reverse)) {
+    for (const e of eventsBetween(model, s0 + ahead, s1 + ahead, model.reverse)) {
       if (e.kind === 'throw') {
         swell(THROW_FROM, THROW_NOTE, 0.2, Math.max(0.01, (e.s - s1) / opts.rate), 0.18, 0.5 * e.side);
       }
@@ -818,7 +966,7 @@
 
     if (opts.guides) drawGuides();
 
-    const t = opts.reverse ? -simT : simT;
+    const t = model.reverse ? -simT : simT;
     drawPaddle(t, 1);
     drawPaddle(t, -1);
     if (opts.trails) drawTrails();
