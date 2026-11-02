@@ -73,13 +73,22 @@
       <input id="guides" type="checkbox" checked>
     </label>
     <label class="row">
-      <span class="label">Trails</span>
-      <input id="trails" type="checkbox" checked>
+      <span class="label">Trail</span>
+      <input id="trail" type="range" min="0" max="3" step="0.05" value="0.35">
+      <span id="trailVal" class="val"></span>
+    </label>
+    <label class="row">
+      <span class="label">Glow</span>
+      <input id="glow" type="checkbox">
     </label>
     <label class="row">
       <span class="label">Sound</span>
       <input id="sound" type="checkbox">
     </label>
+    <div class="row">
+      <span class="label">Theme</span>
+      <button id="theme" class="wide">beige</button>
+    </div>
     <div id="stats"></div>
     <div class="hint">space pause · 1–9 balls · ← → step</div>
   </div>

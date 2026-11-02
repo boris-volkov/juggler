@@ -711,7 +711,7 @@
 
   const STYLES = ['inside', 'outside', 'up', 'rainbow'];   // throw style: the button cycles through them
   const straightUp = (style) => style === 'up' || style === 'rainbow';
-  const opts = { siteswap: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trails: true, sound: false };
+  const opts = { siteswap: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trail: 0.35, glow: false, sound: false };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -719,15 +719,36 @@
   const css = getComputedStyle(document.documentElement);
   const color = (name) => css.getPropertyValue(name).trim();
   // seventies enamel: burnt orange, teal, mustard, olive, plum, navy, rust, sea green, sienna
+  // Glow mode: a light show on a night stage, in neon
+  const neon = ['#ff3d6e', '#2ef0ff', '#ffd43a', '#78ff5a', '#b66cff', '#ff8b24', '#4a83ff', '#ff5ad6', '#5affc6'];
+  const NIGHT = { '--bg': '#060509', '--guide': 'rgba(255, 255, 255, 0.07)',
+    '--path': 'rgba(255, 255, 255, 0.14)', '--ink': 'rgba(255, 255, 255, 0.35)' };
+  // stage colours: the theme's, or the night stage's while glowing
+  const stage = (name) => (opts.glow ? NIGHT[name] : color(name));
+  const ballColor = (id) => (opts.glow ? neon : palette)[id % palette.length];
+
+  // Theme: beige or dark, remembered between visits where the browser allows
+  let theme = 'beige';
+  try { if (localStorage.getItem('juggler-theme') === 'dark') theme = 'dark'; } catch (e) { /* no storage */ }
+  function setTheme(t) {
+    theme = t;
+    document.documentElement.dataset.theme = t;
+    $('theme').textContent = t;
+    try { localStorage.setItem('juggler-theme', t); } catch (e) { /* no storage */ }
+  }
+  setTheme(theme);
+
+  const showTrail = () => { $('trailVal').textContent = opts.trail ? opts.trail.toFixed(2) + 'b' : 'off'; };
+
   const palette = ['#c4552f', '#2f7275', '#d9a12b', '#6e8b3d', '#8c3b5a', '#34477a', '#de7a3e', '#4f9a8c', '#9a5a32'];
 
   // Browsers restore form controls on a reload but the script starts from
   // its defaults, so set the controls from the defaults to keep them agreeing.
   function syncControls() {
     const values = { dwell: opts.dwell, spacing: opts.spacing, width: opts.width,
-      depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate };
+      depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate, trail: opts.trail };
     for (const [id, v] of Object.entries(values)) $(id).value = v;
-    for (const id of ['guides', 'trails', 'sound']) $(id).checked = opts[id];
+    for (const id of ['guides', 'glow', 'sound']) $(id).checked = opts[id];
   }
 
   function rebuild() {
@@ -854,7 +875,9 @@
   $('beat').oninput = (e) => { opts.beat = +e.target.value; rebuild(); };
   $('rate').oninput = (e) => { opts.rate = +e.target.value; rebuild(); };
   $('guides').onchange = (e) => { opts.guides = e.target.checked; };
-  $('trails').onchange = (e) => { opts.trails = e.target.checked; };
+  $('trail').oninput = (e) => { opts.trail = +e.target.value; showTrail(); };
+  $('glow').onchange = (e) => { opts.glow = e.target.checked; };
+  $('theme').onclick = () => setTheme(theme === 'dark' ? 'beige' : 'dark');
   $('sound').onchange = (e) => { opts.sound = e.target.checked; if (opts.sound) unlockAudio(); };
   addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') return;
@@ -911,7 +934,7 @@
 
     // full hand paths, dashed: the loops, or in columns the arches and dips
     // the hand works through over one cycle
-    ctx.strokeStyle = color('--guide');
+    ctx.strokeStyle = stage('--guide');
     ctx.setLineDash([4 * dpr, 5 * dpr]);
     for (const side of [1, -1]) {
       const hand = m.hands[side === 1 ? 0 : 1];
@@ -935,7 +958,7 @@
 
     // ball path: each hand's carries (sampled from its own timeline, so holds
     // show too) and every kind of flight from either hand
-    ctx.strokeStyle = color('--path');
+    ctx.strokeStyle = stage('--path');
     ctx.beginPath();
     for (const side of [1, -1]) {
       for (const seg of m.hands[side === 1 ? 0 : 1].segs) {
@@ -958,7 +981,7 @@
     // throw and catch points: filled = throw, hollow = catch
     // (run backwards, the model's throws are the catches and vice versa)
     const r = 3 * dpr;
-    ctx.fillStyle = color('--path');
+    ctx.fillStyle = stage('--path');
     for (const hand of m.hands) {
       for (const d of hand.dots) {
         ctx.beginPath(); ctx.arc(sx(d.x), sy(d.y), r, 0, TAU);
@@ -975,7 +998,7 @@
     const off = BALL_R + thick / 2;
     const cx = p.x - nx * off, cy = p.y - ny * off;
     const ux = ny, uy = -nx;
-    ctx.strokeStyle = color('--ink');
+    ctx.strokeStyle = stage('--ink');
     ctx.lineWidth = thick * view.s;
     ctx.lineCap = 'round';
     ctx.beginPath();
@@ -985,9 +1008,14 @@
   }
 
   // The motion is a closed-form function of time, so a trail is just the
-  // same balls sampled a little in the past; no history buffer needed.
+  // same balls sampled a little in the past; no history buffer needed. It is
+  // opts.trail beats long, sampled finely enough for the fast swing through
+  // the bottom, and drawn in short runs that fade toward the tail. Glowing,
+  // the runs add up as light: a faint wide halo, the coloured band, and a
+  // white-hot core, like a glowstick swung in the dark.
   function drawTrails() {
-    const steps = 120, span = 0.35 * model.B;   // fine enough for the fast swing through the bottom
+    const span = opts.trail * model.B;
+    const steps = Math.min(1200, Math.max(60, Math.ceil(120 * opts.trail / 0.35)));
     const trails = new Map();
     for (let i = steps; i >= 0; i--) {
       const s = simT - span * i / steps;
@@ -996,20 +1024,77 @@
         trails.get(b.id).push(b);
       }
     }
+    const w = 2 * BALL_R * view.s;
     ctx.lineCap = 'butt';   // round caps overlap and look beaded at low alpha
-    for (const [id, pts] of trails) {
-      ctx.strokeStyle = palette[id % palette.length];
-      for (let i = 1; i < pts.length; i++) {
-        const f = i / (pts.length - 1);           // 0 oldest .. 1 newest
-        ctx.globalAlpha = 0.3 * f * f;
-        ctx.lineWidth = 2 * BALL_R * view.s;
-        ctx.beginPath();
-        ctx.moveTo(sx(pts[i - 1].x), sy(pts[i - 1].y));
-        ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
-        ctx.stroke();
+    ctx.lineJoin = 'round';
+    if (!opts.glow) {
+      const RUN = 6;        // samples per run
+      for (const [id, pts] of trails) {
+        ctx.strokeStyle = ballColor(id);
+        ctx.lineWidth = w;
+        for (let i = 0; i < pts.length - 1; i += RUN) {
+          const j = Math.min(pts.length - 1, i + RUN);
+          const f = (i + j) / 2 / (pts.length - 1);   // 0 oldest .. 1 newest
+          ctx.globalAlpha = 0.3 * f * f;
+          ctx.beginPath();
+          ctx.moveTo(sx(pts[i].x), sy(pts[i].y));
+          for (let k = i + 1; k <= j; k++) ctx.lineTo(sx(pts[k].x), sy(pts[k].y));
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+    // Light adds up, so a joint between runs would show as a seam. Instead
+    // each pass is a stack of unbroken strokes, every one from some point to
+    // the head: the newer the stretch, the more of them light it, which
+    // fades the tail with no joints along the trail.
+    ctx.globalCompositeOperation = 'lighter';
+    const LAYERS = 40;
+    const passes = [[2.4 * w, 0.12], [w, 0.75], [0.3 * w, 0.6, '#fff']];   // width, alpha at the head, tint
+    for (const [id, all] of trails) {
+      const stride = Math.max(1, Math.floor(all.length / 300));
+      const pts = all.filter((p, i) => i % stride === 0 || i === all.length - 1);
+      for (const [width, alpha, tint] of passes) {
+        ctx.strokeStyle = tint || ballColor(id);
+        ctx.lineWidth = width;
+        ctx.globalAlpha = alpha / LAYERS;
+        for (let l = 0; l < LAYERS; l++) {
+          const i0 = Math.floor((pts.length - 1) * l / LAYERS);
+          ctx.beginPath();
+          ctx.moveTo(sx(pts[i0].x), sy(pts[i0].y));
+          for (let k = i0 + 1; k < pts.length; k++) ctx.lineTo(sx(pts[k].x), sy(pts[k].y));
+          ctx.stroke();
+        }
       }
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // A glowing ball: white-hot in the middle, its colour at the rim, and a
+  // halo fading out to four times its size.
+  function drawBall(ball) {
+    const x = sx(ball.x), y = sy(ball.y), r = BALL_R * view.s, col = ballColor(ball.id);
+    if (!opts.glow) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
+      return;
+    }
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 4 * r);
+    g.addColorStop(0, '#fff');
+    g.addColorStop(0.12, '#fff');
+    g.addColorStop(0.25, col);
+    g.addColorStop(0.4, col + '66');
+    g.addColorStop(1, col + '00');
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, 4 * r, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   // ---------- sound ----------
@@ -1105,7 +1190,7 @@
     playEvents(prevT, simT);
     updateView(dt);
 
-    ctx.fillStyle = color('--bg');
+    ctx.fillStyle = stage('--bg');
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (opts.guides) drawGuides();
@@ -1113,18 +1198,13 @@
     const t = model.reverse ? -simT : simT;
     drawPaddle(t, 1);
     drawPaddle(t, -1);
-    if (opts.trails) drawTrails();
-
-    for (const ball of ballsAt(model, t)) {
-      ctx.fillStyle = palette[ball.id % palette.length];
-      ctx.beginPath();
-      ctx.arc(sx(ball.x), sy(ball.y), BALL_R * view.s, 0, TAU);
-      ctx.fill();
-    }
+    if (opts.trail > 0) drawTrails();
+    for (const ball of ballsAt(model, t)) drawBall(ball);
     requestAnimationFrame(frame);
   }
 
   syncControls();
+  showTrail();
   rebuild();
   fillPatterns();
   requestAnimationFrame(frame);

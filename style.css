@@ -1,5 +1,6 @@
 /* Retro beige: warm paper, brown ink, and controls drawn like old hardware,
-   with hard edges and offset shadows instead of blur and rounding. */
+   with hard edges and offset shadows instead of blur and rounding. The dark
+   theme is the same hardware in walnut, with beige linework. */
 :root {
   color-scheme: light;
   --bg: #e9dcc3;
@@ -11,6 +12,23 @@
   --face: #f6eedd;      /* raised surfaces: buttons, knobs, fields */
   --groove: #cdbb9b;    /* sunken surfaces: slider tracks */
   --accent: #c4552f;
+  --shadow: #3a2e24;
+  --hover: #fffaf0;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1e1914;
+  --ink: #e8d8bb;
+  --muted: #9c876b;
+  --guide: rgba(232, 216, 187, 0.16);
+  --path: rgba(232, 216, 187, 0.34);
+  --panel: #29221b;
+  --face: #362d24;
+  --groove: #4b3e31;
+  --accent: #e2763f;
+  --shadow: #0b0907;
+  --hover: #43382d;
 }
 
 * { box-sizing: border-box; }
@@ -38,7 +56,7 @@ canvas {
   background: var(--panel);
   border: 2px solid var(--ink);
   border-radius: 3px;
-  box-shadow: 4px 4px 0 var(--ink);
+  box-shadow: 4px 4px 0 var(--shadow);
   user-select: none;
 }
 
@@ -101,7 +119,7 @@ input[type="text"] {
   border: 1.5px solid var(--ink);
   border-radius: 2px;
   height: 22px;
-  box-shadow: 2px 2px 0 var(--ink);
+  box-shadow: 2px 2px 0 var(--shadow);
 }
 button {
   width: 26px;
@@ -109,7 +127,7 @@ button {
   cursor: pointer;
 }
 button.wide { width: auto; padding: 0 10px; }
-button:hover, select:hover { background: #fffaf0; }
+button:hover, select:hover { background-color: var(--hover); }
 button:active {
   transform: translate(2px, 2px);
   box-shadow: none;
@@ -150,14 +168,14 @@ input[type="range"]::-webkit-slider-runnable-track {
   background: var(--groove);
   border: 1.5px solid var(--ink);
   border-radius: 1px;
-  box-shadow: inset 1px 1px 0 rgba(58, 46, 36, 0.35);
+  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.3);
 }
 input[type="range"]::-moz-range-track {
   height: 6px;
   background: var(--groove);
   border: 1.5px solid var(--ink);
   border-radius: 1px;
-  box-shadow: inset 1px 1px 0 rgba(58, 46, 36, 0.35);
+  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.3);
 }
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;
@@ -167,7 +185,7 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1.5px solid var(--ink);
   border-radius: 1px;
   background: linear-gradient(90deg, transparent 4px, var(--ink) 4px 5px, transparent 5px), var(--face);
-  box-shadow: 1.5px 1.5px 0 var(--ink);
+  box-shadow: 1.5px 1.5px 0 var(--shadow);
 }
 input[type="range"]::-moz-range-thumb {
   width: 10px;
@@ -175,7 +193,7 @@ input[type="range"]::-moz-range-thumb {
   border: 1.5px solid var(--ink);
   border-radius: 1px;
   background: linear-gradient(90deg, transparent 3px, var(--ink) 3px 4px, transparent 4px), var(--face);
-  box-shadow: 1.5px 1.5px 0 var(--ink);
+  box-shadow: 1.5px 1.5px 0 var(--shadow);
 }
 input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -188,12 +206,12 @@ input[type="checkbox"] {
   border: 1.5px solid var(--ink);
   border-radius: 1px;
   background: var(--face);
-  box-shadow: 1.5px 1.5px 0 var(--ink);
+  box-shadow: 1.5px 1.5px 0 var(--shadow);
   cursor: pointer;
 }
 input[type="checkbox"]:checked {
   background: var(--ink);
-  box-shadow: inset 0 0 0 2px var(--face), 1.5px 1.5px 0 var(--ink);
+  box-shadow: inset 0 0 0 2px var(--face), 1.5px 1.5px 0 var(--shadow);
 }
 input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
