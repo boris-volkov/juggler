@@ -246,16 +246,33 @@
     return { pattern: p, n: sum / L };
   }
 
+  // How many balls are thrown by both hands: follow each round trip through
+  // the beats of a cycle (it carries as many balls as its throws add up to
+  // cycles) and see whether it ever lands on the other hand's beat.
+  function sharedBalls(p) {
+    const L = p.length, P = L % 2 ? 2 * L : L, seen = new Set();
+    let count = 0;
+    for (let r = 0; r < P; r++) {
+      if (p[r % L] === 0 || seen.has(r)) continue;
+      let c = r, both = false, T = 0;
+      do { seen.add(c); both = both || p[c % L] % 2 === 1; T += p[c % L]; c = (c + p[c % L]) % P; } while (c !== r);
+      if (both) count += T / P;
+    }
+    return count;
+  }
+
   function buildModel(opts) {
     const B = opts.beat;
     // A ball can't jump from the catch point to the throw point in zero
     // time, so "no dwell" means the shortest carry: a quick hairpin.
     // A 1 flies for a beat less the dwell, so a long dwell leaves it no time.
     const D = Math.max(MIN_DWELL, opts.pattern.includes(1) ? Math.min(opts.dwell, ONE_DWELL) : opts.dwell);
-    // A straight-up throw comes down where it went up, so only patterns of
-    // even throws (each ball back to its thrower) can be juggled in columns.
+    // A straight-up throw comes down where it went up. A ball that only
+    // ever makes even throws stays with its thrower, in a column on that
+    // hand's side; a ball that goes to both hands has to come down where
+    // either can reach it, in the middle, so only one ball may do that.
     // Columns look the same run backwards, so they have no reverse.
-    const columns = !!opts.columns && opts.pattern.every((k) => k % 2 === 0);
+    const columns = !!opts.columns && sharedBalls(opts.pattern) <= 1;
     const reverse = !!opts.reverse && !columns;
     // Throwing outside is shown as the model run backwards in time. Run
     // backwards, a throw from beat b landing at b + k becomes a throw of the
@@ -354,11 +371,12 @@
     }
     const idAt = (b) => events[mod(b, Q) + 2 * Q];
 
-    // Columns: every ball keeps to a column of its own. A hand's balls take
-    // its columns inner to outer, in the order it first throws them. With
-    // balls in both hands the columns are spaced evenly across the whole
-    // pattern; a hand juggling alone spreads them over its own loop's width.
-    // An idle hand waits under the middle of its columns.
+    // Columns: every ball keeps to a column of its own. A hand's own balls
+    // take its columns inner to outer, in the order it first throws them,
+    // and a ball the hands pass between them goes up the middle. With balls
+    // on both sides the columns are spaced evenly across the whole pattern;
+    // a hand juggling alone spreads them over its own loop's width. An idle
+    // hand waits under the middle of the columns it uses.
     let colX = null;
     const restX = [geom.X, -geom.X];
     if (columns) {
@@ -368,15 +386,21 @@
         const id = events[b];
         if (id >= 0 && !own[b % 2].includes(id)) own[b % 2].push(id);
       }
-      const nR = own[0].length, nL = own[1].length;
-      const S = geom.X + geom.a - geom.a / Math.max(nR, nL);   // outermost column
+      const shared = own[0].filter((id) => own[1].includes(id));
+      const [onlyR, onlyL] = own.map((ids) => ids.filter((id) => !shared.includes(id)));
+      const nR = onlyR.length, nL = onlyL.length, nS = shared.length, total = nR + nL + nS;
+      if ((nR && nL) || nS) {
+        const S = geom.X + geom.a - geom.a / Math.max(nR, nL, 1);   // outermost column
+        const at = (i) => (total > 1 ? -S + 2 * S * i / (total - 1) : 0);
+        onlyL.forEach((id, j) => { colX[id] = at(nL - 1 - j); });
+        shared.forEach((id, j) => { colX[id] = at(nL + j); });
+        onlyR.forEach((id, j) => { colX[id] = at(nL + nS + j); });
+      } else {
+        [onlyR, onlyL].forEach((ids, hi) => ids.forEach((id, j) => {
+          colX[id] = (hi === 0 ? 1 : -1) * (geom.X - geom.a + 2 * geom.a * (j + 0.5) / ids.length);
+        }));
+      }
       own.forEach((ids, hi) => {
-        const side = hi === 0 ? 1 : -1;
-        ids.forEach((id, j) => {
-          colX[id] = nR && nL
-            ? -S + 2 * S * (side === 1 ? nL + j : nL - 1 - j) / (nR + nL - 1)
-            : side * (geom.X - geom.a + 2 * geom.a * (j + 0.5) / ids.length);
-        });
         if (ids.length) restX[hi] = ids.reduce((s, id) => s + colX[id], 0) / ids.length;
       });
     }
@@ -623,7 +647,7 @@
     const peaks = Object.values(model.types).map((ty) => ty.apex * 100);
     const lo = Math.round(Math.min(...peaks)), hi = Math.round(Math.max(...peaks));
     const capped = opts.pattern.includes(1) && opts.dwell > ONE_DWELL;
-    const note = opts.style === 'up' && !model.columns ? '  (straight up needs all even throws)'
+    const note = opts.style === 'up' && !model.columns ? '  (straight up: one ball at most can cross)'
       : capped ? `  (dwell held to ${ONE_DWELL * 50}% for 1s)` : '';
     $('stats').textContent =
       `${name}  ${ss}${note}\n` +
@@ -639,12 +663,12 @@
     1: [['300', 'one ball']],
     2: [['330', 'cascade'], ['4400', 'columns', 'up'], ['31', 'shower'], ['40', 'one-hand fountain'],
       ['40', 'one-hand columns', 'up'], ['420', '420'], ['312', '312']],
-    3: [['3', 'cascade'], ['4440', 'pillars', 'up'], ['51', 'shower'], ['423', '423'], ['441', '441'], ['531', '531'],
+    3: [['3', 'cascade'], ['4440', 'pillars', 'up'], ['423', 'swap pillars', 'up'], ['51', 'shower'], ['423', '423'], ['441', '441'], ['531', '531'],
       ['4413', '4413'], ['42', 'two in one hand'], ['522', '522'], ['504', '504'], ['60', 'three in one hand'],
       ['60', 'one-hand columns', 'up']],
     4: [['4', 'fountain'], ['4', 'pillars', 'up'], ['71', 'shower'], ['53', 'half shower'], ['534', '534'],
       ['552', '552'], ['5551', '5551'], ['633', '633'], ['642', '642'], ['642', '642 in columns', 'up'], ['7531', '7531']],
-    5: [['5', 'cascade'], ['64', 'columns', 'up'], ['91', 'shower'], ['64', '64'], ['645', '645'], ['663', '663'],
+    5: [['5', 'cascade'], ['663', 'swap pillars', 'up'], ['64', 'columns', 'up'], ['91', 'shower'], ['64', '64'], ['645', '645'], ['663', '663'],
       ['744', '744'], ['753', '753'], ['75751', '75751'], ['66661', '66661']],
     6: [['6', 'fountain'], ['6', 'pillars', 'up'], ['75', 'half shower'], ['855', '855']],
     7: [['7', 'cascade'], ['86', '86'], ['86', 'columns', 'up']],

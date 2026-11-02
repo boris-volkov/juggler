@@ -97,7 +97,7 @@ input[type="text"] {
 select:focus,
 input[type="text"]:focus { outline: none; border-color: var(--path); }
 input[type="text"].bad { border-color: #e4572e; }
-select { padding: 0 2px; cursor: pointer; }
+select { width: 172px; padding: 0 2px; cursor: pointer; }
 select option { background: var(--bg); color: var(--ink); }
 .row[hidden] { display: none; }
 .err { color: #e4572e; font-size: 11px; white-space: nowrap; }

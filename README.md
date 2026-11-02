@@ -8,7 +8,7 @@ Run it: open `index.html`, or https://boris-volkov.github.io/juggler/
 
 - 1–9 balls (odd counts cascade, even counts fountain; 1 and 2 use `300` and `330`)
 - throw outside (reverse cascade) or inside (standard) — the one is exactly the other run backwards in time
-- or straight up, for pillars and columns: each ball keeps to a column of its own (patterns of even throws only)
+- or straight up, for pillars and columns: each ball keeps to a column of its own, and one ball may be passed between the hands up the middle (423, 663)
 - dwell, tempo, playback speed, and the spacing, width and depth of the hand loops
 
 Keys: space pauses, 1–9 sets the balls, ← → step a frame.
