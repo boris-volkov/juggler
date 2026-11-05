@@ -389,7 +389,7 @@
           // the paddle faces along the launch and back up the arrival: flat
           // under a straight-up throw, tipped in under a rainbow
           types[key] = {
-            k, cross, F, arc, pT: { x: arc ? rainX : 0, y: yT }, v0, v1, vc, apex: top,
+            k, cross, F, arc, pT: { x: arc ? rainX : 0, y: yT }, y0: yT, v0, v1, vc, apex: top,
             nT: Math.atan2(v0.y, v0.x), nC: Math.atan2(-vc.y, -vc.x),
             sT: Math.hypot(v0.x, v0.y), sC: Math.hypot(v1.x, v1.y),
           };
@@ -408,6 +408,8 @@
         const top = pT.y + (v0.y > 0 ? v0.y * v0.y / (2 * G) : 0);
         types[key] = {
           k, cross, F, thT: sol.thT, thC: sol.thC, pT, v0, v1, apex: top,
+          // where the ball really leaves the hand (run backwards, the catch point)
+          y0: reverse ? pC.y : pT.y,
           // paddle face directions: along the launch, and back up the arrival
           nT: Math.atan2(v0.y, v0.x), nC: Math.atan2(-vc.y, -vc.x),
           // Hand speeds at the ends of a carry. A throw has to match the ball:
@@ -606,9 +608,22 @@
     }
     const extent = { w: 2 * xMax, h: Math.max(apex, geom.b) - yMin, xMax, yMin };
 
+    // The heights a pattern mixes, tallest first: each throw's rise above the
+    // point it leaves the hand, as a ratio of the lowest. A 1 is a flat pass
+    // rather than a height, so it isn't counted; a 4 and a 4x are one height.
+    const rises = new Map();
+    for (const ty of Object.values(types)) {
+      const rise = ty.apex - ty.y0, seen = rises.get(ty.k);
+      if (ty.k !== 1 && (!seen || rise > seen.rise)) rises.set(ty.k, { k: ty.k, apex: ty.apex, rise });
+    }
+    let heights = [...rises.values()].sort((a, b) => b.rise - a.rise);
+    const lowest = heights.length ? heights[heights.length - 1].rise : 0;
+    if (heights.length < 2 || lowest < 1e-3) heights = [];
+    for (const row of heights) row.ratio = row.rise / lowest;
+
     return {
       n, h, P, table, sync: pat.sync, ones, geom, D, B, types, apex, err, extent, arc, hands, Q, events,
-      columns, rainbow, reverse, colX, colAt,
+      columns, rainbow, reverse, colX, colAt, heights,
     };
   }
 
@@ -711,7 +726,7 @@
 
   const STYLES = ['inside', 'outside', 'up', 'rainbow'];   // throw style: the button cycles through them
   const straightUp = (style) => style === 'up' || style === 'rainbow';
-  const opts = { siteswap: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, trail: 0.35, glow: false, sound: false };
+  const opts = { siteswap: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, heights: false, trail: 0.35, glow: false, sound: false };
   let model = buildModel(opts);
   let simT = 0, paused = false, last = performance.now();
   let view = null;
@@ -748,7 +763,7 @@
     const values = { dwell: opts.dwell, spacing: opts.spacing, width: opts.width,
       depth: opts.depth, rise: opts.reach, beat: opts.beat, rate: opts.rate, trail: opts.trail };
     for (const [id, v] of Object.entries(values)) $(id).value = v;
-    for (const id of ['guides', 'glow', 'sound']) $(id).checked = opts[id];
+    for (const id of ['guides', 'heights', 'glow', 'sound']) $(id).checked = opts[id];
   }
 
   function rebuild() {
@@ -876,6 +891,7 @@
   $('rate').oninput = (e) => { opts.rate = +e.target.value; rebuild(); };
   $('guides').onchange = (e) => { opts.guides = e.target.checked; };
   $('trail').oninput = (e) => { opts.trail = +e.target.value; showTrail(); };
+  $('heights').onchange = (e) => { opts.heights = e.target.checked; };
   $('glow').onchange = (e) => { opts.glow = e.target.checked; };
   $('theme').onclick = () => setTheme(theme === 'dark' ? 'beige' : 'dark');
   $('sound').onchange = (e) => { opts.sound = e.target.checked; if (opts.sound) unlockAudio(); };
@@ -895,6 +911,9 @@
   addEventListener('resize', resize);
   resize();
 
+  const RULER_W = 80;   // room for the height ruler beside the pattern (css pixels)
+  const showHeights = () => opts.heights && model.heights.length > 0;
+
   function targetView() {
     const g = model.geom;
     const xMax = model.extent.xMax + BALL_R + 0.06;
@@ -906,9 +925,10 @@
     const dpr = devicePixelRatio || 1;
     const r = $('panel').getBoundingClientRect();
     const gap = 16 * dpr, pad = 0.08;
+    const ruler = showHeights() ? 2 * RULER_W * dpr : 0;   // kept even, so the pattern stays centred
     const fit = (x0, y0) => {
       const w = canvas.width - x0, h = canvas.height - y0;
-      const s = Math.min(w * (1 - 2 * pad) / (2 * xMax), h * (1 - 2 * pad) / (yMax - yMin));
+      const s = Math.min((w - ruler) * (1 - 2 * pad) / (2 * xMax), h * (1 - 2 * pad) / (yMax - yMin));
       return { s, cx: x0 + w / 2, cy: (yMax + yMin) / 2, oy: y0 / 2 };
     };
     const beside = fit(r.right * dpr + gap, 0), below = fit(0, r.bottom * dpr + gap);
@@ -987,6 +1007,38 @@
         ctx.beginPath(); ctx.arc(sx(d.x), sy(d.y), r, 0, TAU);
         (d.kind === 'throw') !== m.reverse ? ctx.fill() : ctx.stroke();
       }
+    }
+  }
+
+  // A ruler beside the pattern: a faint level across it at each throw's peak,
+  // labelled with the throw and its height as a ratio of the lowest.
+  function drawHeights() {
+    const dpr = devicePixelRatio || 1, hs = model.heights;
+    const x0 = sx(-model.extent.xMax), x = sx(model.extent.xMax + BALL_R + 0.06);
+    ctx.lineWidth = dpr;
+    ctx.strokeStyle = stage('--path');
+    ctx.beginPath();
+    ctx.moveTo(x, sy(0));
+    ctx.lineTo(x, sy(hs[0].apex));
+    ctx.stroke();
+    ctx.fillStyle = stage('--ink');
+    ctx.font = `${12 * dpr}px "IBM Plex Mono", ui-monospace, Consolas, monospace`;
+    ctx.textBaseline = 'middle';
+    let last = -Infinity;
+    for (const { k, apex, ratio } of hs) {
+      const y = sy(apex);
+      ctx.setLineDash([2 * dpr, 4 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(x0, y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 6 * dpr, y);
+      ctx.stroke();
+      last = Math.max(y, last + 15 * dpr);   // labels of near heights stay apart
+      ctx.fillText(`${k}  ${ratio < 1.05 ? 1 : ratio.toFixed(1)}×`, x + 10 * dpr, last);
     }
   }
 
@@ -1197,6 +1249,7 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (opts.guides) drawGuides();
+    if (showHeights()) drawHeights();
 
     const t = model.reverse ? -simT : simT;
     drawPaddle(t, 1);

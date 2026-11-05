@@ -12,6 +12,7 @@ Run it: open `index.html`, or https://boris-volkov.github.io/juggler/
 - or as a rainbow: the same, but the ball that changes hands arcs from the outside of one hand, over pillars standing close in the middle, to the outside of the other
 - any async siteswap (`534`, `441`, `51`) or synchronous one (`(4,4)`, `(6x,4)*`), from the pattern menu or typed in
 - dwell, tempo, playback speed, and the spacing, width and depth of the hand loops
+- a ruler beside the pattern showing mixed throw heights as ratios of the lowest
 - trail length, a glow mode (neon light trails on a night stage, like glowsticks), and a beige or dark theme
 
 Keys: space pauses, 1–9 sets the balls, ← → step a frame.
