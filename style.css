@@ -133,6 +133,14 @@ button:active {
   box-shadow: none;
 }
 
+/* one square per ball: filled while it shows, hollow while it's hidden */
+#swatches { display: flex; gap: 4px; }
+button.swatch {
+  width: 15px;
+  height: 15px;
+  box-shadow: 1.5px 1.5px 0 var(--shadow);
+}
+
 select {
   width: 172px;
   padding: 0 22px 0 6px;

@@ -728,6 +728,7 @@
   const straightUp = (style) => style === 'up' || style === 'rainbow';
   const opts = { siteswap: patternFor(3), style: 'inside', dwell: 0.6, beat: 0.25, rate: 0.5, spacing: 0.3, width: 0.22, depth: 0.14, reach: 0.08, guides: true, heights: false, trail: 0.35, glow: false, sound: false };
   let model = buildModel(opts);
+  const hidden = new Set();   // ids of the balls switched off
   let simT = 0, paused = false, last = performance.now();
   let view = null;
 
@@ -841,6 +842,31 @@
     menu.value = preset ? key : 'custom';
     $('customRow').hidden = preset;
     if (!preset) $('siteswap').value = opts.siteswap;
+    hidden.clear();   // a new pattern deals out its balls afresh
+    fillSwatches();
+  }
+
+  // One square per ball in that ball's colour: click to hide or show it.
+  function fillSwatches() {
+    const box = $('swatches');
+    box.innerHTML = '';
+    for (let id = 0; id < model.n; id++) {
+      const b = document.createElement('button'), col = ballColor(id);
+      const paint = () => {
+        const off = hidden.has(id);
+        b.style.background = off ? 'transparent' : col;
+        b.style.borderColor = off ? col : '';
+        b.setAttribute('aria-pressed', String(!off));
+      };
+      b.className = 'swatch';
+      b.setAttribute('aria-label', `Show ball ${id + 1}`);
+      b.onclick = () => {
+        if (!hidden.delete(id)) hidden.add(id);
+        paint();
+      };
+      paint();
+      box.append(b);
+    }
   }
 
   function setPattern(siteswap) {
@@ -892,7 +918,7 @@
   $('guides').onchange = (e) => { opts.guides = e.target.checked; };
   $('trail').oninput = (e) => { opts.trail = +e.target.value; showTrail(); };
   $('heights').onchange = (e) => { opts.heights = e.target.checked; };
-  $('glow').onchange = (e) => { opts.glow = e.target.checked; };
+  $('glow').onchange = (e) => { opts.glow = e.target.checked; fillSwatches(); };
   $('theme').onclick = () => setTheme(theme === 'dark' ? 'beige' : 'dark');
   $('sound').onchange = (e) => { opts.sound = e.target.checked; if (opts.sound) unlockAudio(); };
   addEventListener('keydown', (e) => {
@@ -1072,6 +1098,7 @@
     for (let i = steps; i >= 0; i--) {
       const s = simT - span * i / steps;
       for (const b of ballsAt(model, model.reverse ? -s : s)) {
+        if (hidden.has(b.id)) continue;
         if (!trails.has(b.id)) trails.set(b.id, []);
         trails.get(b.id).push(b);
       }
@@ -1255,7 +1282,7 @@
     drawPaddle(t, 1);
     drawPaddle(t, -1);
     if (opts.trail > 0) drawTrails();
-    for (const ball of ballsAt(model, t)) drawBall(ball);
+    for (const ball of ballsAt(model, t)) if (!hidden.has(ball.id)) drawBall(ball);
     requestAnimationFrame(frame);
   }
 
